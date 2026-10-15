@@ -11,6 +11,7 @@ import com.abeswastaken.trades.core.ledger.LedgerState
 import com.abeswastaken.trades.core.ledger.Position
 import com.abeswastaken.trades.core.market.Headline
 import com.abeswastaken.trades.core.market.Quote
+import com.abeswastaken.trades.core.model.AssetType
 import com.abeswastaken.trades.core.model.Fill
 import com.abeswastaken.trades.data.AppSettings
 import com.abeswastaken.trades.data.FillDraft
@@ -205,23 +206,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** An option Positions should open the action sheet for (from a Home alert). */
     val focusPosition = MutableStateFlow<com.abeswastaken.trades.core.model.Instrument?>(null)
 
+    /**
+     * Opens Log Fill at once with the covered call prefilled (ticker, CALL, SELL, contracts, next Friday),
+     * then fills in a strike and premium from today's chain when Yahoo answers, unless he's typed them already.
+     */
     fun coveredCallDraft(p: Position, contracts: Int) {
-        if (suggesting.value != null) return
         val t = p.instrument.ticker
+        val start = FillDraft.coveredCall(
+            t, contracts, com.abeswastaken.trades.core.scanner.CoveredCallScreener.nextFriday(LocalDate.now()), null, null,
+            "Covered call on $contracts x 100 $t. Looking up a strike in today's chain…",
+        )
+        draft = start
+        openLogRequest.value = true
         suggesting.value = t
         viewModelScope.launch {
-            // Never keep him waiting on Yahoo: after a few seconds, open the form without a suggestion.
-            val (q, o) = runCatching { kotlinx.coroutines.withTimeoutOrNull(8_000) { repo.suggestCall(t, p.avgCost) } }.getOrNull() ?: (null to null)
-            val expiry = o?.expiry ?: com.abeswastaken.trades.core.scanner.CoveredCallScreener.nextFriday(LocalDate.now())
-            val context = when {
-                o == null -> "Covered call on $contracts x 100 $t. No chain right now: enter the strike and premium from Schwab."
-                o.strike < p.avgCost -> "Nearest strike with a bid is below your cost (${"%.2f".format(p.avgCost)}): assignment would lock in a loss."
-                else -> "Suggested: nearest strike above your cost and the price (${q?.price?.let { "%.2f".format(it) } ?: "?"}). " +
-                    (if (o.liveBid) "Bid ${"%.2f".format(o.bid)}." else "Market closed: premium is the last trade.") + " Use what Schwab fills."
+            val (q, o) = try {
+                kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { repo.suggestCall(t, p.avgCost) }
+                } ?: (null to null)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null to null
             }
-            draft = FillDraft.coveredCall(t, contracts, expiry, o?.strike, o?.premium, context)
             suggesting.value = null
-            openLogRequest.value = true
+            val d = draft
+            // Only touch the form if it's still this covered call.
+            if (d.ticker != t || d.type != AssetType.CALL || d.editId != null || d.context != start.context) return@launch
+            draft = when {
+                o == null -> d.copy(context = "No chain for $t right now: enter the strike and premium Schwab filled.")
+                else -> {
+                    val ctx = if (o.strike < p.avgCost) "Nearest strike with a bid is below your cost (${"%.2f".format(p.avgCost)}): assignment would lock in a loss."
+                        else "Suggested: nearest strike above your cost and the price (${q?.price?.let { "%.2f".format(it) } ?: "?"}). " +
+                            (if (o.liveBid) "Bid ${"%.2f".format(o.bid)}." else "Market closed: premium is the last trade.") + " Use what Schwab fills."
+                    d.copy(
+                        strike = d.strike.ifBlank { o.strike.let { if (it == Math.floor(it)) it.toLong().toString() else it.toString() } },
+                        price = d.price.ifBlank { "%.2f".format(java.util.Locale.US, o.premium) },
+                        expiry = if (d.strike.isBlank()) o.expiry.toString() else d.expiry,
+                        context = ctx,
+                    )
+                }
+            }
         }
     }
 
