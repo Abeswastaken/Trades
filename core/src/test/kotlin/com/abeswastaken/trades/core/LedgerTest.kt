@@ -69,6 +69,44 @@ class LedgerTest {
         assertEquals(5000 + 42 + 426.0, s.cash, 1e-6)
     }
 
+    @Test fun `selling every lot at once is not a wash sale against itself`() {
+        val fills = listOf(fill(f, Side.BUY, 100.0, 12.0), fill(f, Side.BUY, 100.0, 11.0, day = 9), fill(f, Side.SELL, 200.0, 10.0, day = 14))
+        val s = Ledger.compute(fills, 5000.0)
+        assertTrue(s.closedLots.none { it.washSale })
+        // a rebuy afterwards still flags it
+        val s2 = Ledger.compute(fills + fill(f, Side.BUY, 200.0, 10.5, day = 20), 5000.0)
+        assertTrue(s2.closedLots.all { it.washSale })
+    }
+
+    @Test fun `rolling a short call closes it and opens the new one`() {
+        val buy = fill(f, Side.BUY, 200.0, 12.0)
+        val sell = fill(fCall, Side.SELL, 2.0, 0.40)
+        val pos = Ledger.compute(listOf(buy, sell), 5000.0).positions.first { it.instrument == fCall }
+        val later = LocalDate.of(2026, 11, 6)
+        val roll = OptionEvents.roll(pos, 0.60, 14.0, later, 0.75, d.plusDays(5))
+            .mapIndexed { i, x -> x.copy(id = 50L + i) }
+        val s = Ledger.compute(listOf(buy, sell) + roll, 5000.0)
+        val opts = s.positions.filter { it.instrument.isOption }
+        assertEquals(1, opts.size)
+        assertEquals(Instrument.call("F", 14.0, later), opts[0].instrument)
+        assertEquals(-2.0, opts[0].quantity, 1e-9)
+        // closed at a 0.20 loss per share on 2 contracts
+        assertEquals(-40.0, s.realizedTotal, 1e-9)
+        assertEquals(0, s.coverableContracts("F"))
+    }
+
+    @Test fun `an assigned short put buys the shares at the strike`() {
+        val put = Instrument("F", com.abeswastaken.trades.core.model.AssetType.PUT, 12.0, LocalDate.of(2026, 10, 30))
+        val sell = fill(put, Side.SELL, 1.0, 0.30)
+        val lot = Ledger.compute(listOf(sell), 2000.0).openLots.first()
+        val events = OptionEvents.assignShortPut(lot, 1.0, 100, LocalDate.of(2026, 10, 30))
+        val s = Ledger.compute(listOf(sell) + events, 2000.0)
+        assertEquals(1, s.positions.size)
+        assertEquals(100.0, s.positions[0].quantity, 1e-9)
+        assertEquals(30.0, s.realizedTotal, 1e-9)
+        assertEquals(2000 + 30 - 1200.0, s.cash, 1e-9)
+    }
+
     @Test fun `buy to close a short call realizes the difference`() {
         val s = Ledger.compute(listOf(fill(fCall, Side.SELL, 2.0, 0.50), fill(fCall, Side.BUY, 2.0, 0.10, day = 3)), 0.0)
         assertEquals(80.0, s.realizedTotal, 1e-9)

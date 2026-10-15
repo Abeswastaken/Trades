@@ -42,19 +42,21 @@ import com.abeswastaken.trades.ui.AppViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
-    val initial by vm.draft.collectAsState()
-    var d by remember(initial) { mutableStateOf(initial) }
+    // The draft lives in the ViewModel so typed input survives rotation.
+    var d by vm::draft
+    val saving by vm.saving.collectAsState()
     val preview = d.toFill()
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Log fill") },
+            title = { Text(if (d.editId != null) "Edit fill" else "Log fill") },
             navigationIcon = { IconButton(onClick = done) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
         )
         Column(
             Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            d.context?.let { InfoCard { Text(it, style = MaterialTheme.typography.bodyMedium) } }
             d.recommendationSummary?.let {
                 InfoCard {
                     Text("From recommendation", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
@@ -89,7 +91,7 @@ fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
             )
             if (d.type != AssetType.STOCK) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NumberField(d.strike, { d = d.copy(strike = it) }, "Strike", Modifier.weight(1f))
+                    NumberField(d.strike, { d = d.copy(strike = it) }, "Strike", Modifier.weight(1f).testTag("field_strike"))
                     OutlinedTextField(
                         d.expiry, { d = d.copy(expiry = it) }, label = { Text("Expiry (YYYY-MM-DD)") },
                         singleLine = true, modifier = Modifier.weight(1.4f),
@@ -112,8 +114,8 @@ fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
             preview.onSuccess { f -> Muted("Cash effect: ${signedMoney(f.cashFlow)}") }
                 .onFailure { Muted(it.message ?: "") }
 
-            Button(onClick = { vm.saveDraft(d, done) }, enabled = preview.isSuccess, modifier = Modifier.fillMaxWidth().testTag("save_fill")) {
-                Text("Save fill")
+            Button(onClick = { vm.saveDraft(d, done) }, enabled = preview.isSuccess && !saving, modifier = Modifier.fillMaxWidth().testTag("save_fill")) {
+                Text(if (d.editId != null) "Save changes" else "Save fill")
             }
             Spacer(Modifier.height(32.dp))
         }

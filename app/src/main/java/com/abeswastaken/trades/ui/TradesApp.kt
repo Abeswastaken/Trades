@@ -55,6 +55,21 @@ fun TradesApp(vm: AppViewModel) {
     LaunchedEffect(toast) {
         toast?.let { snackbar.showSnackbar(it); vm.toast.value = null }
     }
+    // A finished recommendation opens from here, so it still opens if the screen rotated while it ran.
+    val run by vm.recRun.collectAsState()
+    LaunchedEffect(run) {
+        (run as? RecRun.Done)?.let { nav.navigate("rec/${it.id}"); vm.recRun.value = RecRun.Idle }
+    }
+    val openTab by vm.openTab.collectAsState()
+    LaunchedEffect(openTab) {
+        openTab?.let { t ->
+            vm.openTab.value = null
+            nav.navigate(t) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+            }
+        }
+    }
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
 
@@ -84,14 +99,14 @@ fun TradesApp(vm: AppViewModel) {
     ) { pad ->
         NavHost(nav, startDestination = "home", modifier = Modifier.padding(pad)) {
             composable("home") {
+                fun go(route: String) = nav.navigate(route) {
+                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                }
                 HomeScreen(
                     vm, openRec = { nav.navigate("rec/$it") },
-                    openPositions = {
-                        nav.navigate("positions") {
-                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                        }
-                    },
+                    openPositions = { go("positions") },
+                    openWatch = { tab -> vm.watchTab.value = tab; go("watch") },
                 )
             }
             composable("positions") { PositionsScreen(vm, openLog = { nav.navigate("log") }) }

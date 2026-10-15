@@ -276,4 +276,19 @@ class DiscoveryTest {
             server.shutdown()
         }
     }
+
+    @Test fun `call to write stays above cost basis and falls back to the nearest OTM`() {
+        val exp = LocalDate.of(2026, 10, 23)
+        fun c(k: Double, bid: Double) = OptionQuote("F", k, exp, bid, bid + 0.02, bid, 100, 10)
+        val calls = listOf(c(12.0, 0.50), c(12.5, 0.30), c(13.0, 0.15), c(13.5, 0.0))
+        assertEquals(12.5, CoveredCallScreener.callToWrite(12.10, 12.40, calls)!!.strike, 1e-9)
+        assertEquals(12.5, CoveredCallScreener.callToWrite(12.10, 11.0, calls)!!.strike, 1e-9)
+        // cost 14 is above every strike with a bid: fall back to the nearest OTM
+        assertEquals(12.5, CoveredCallScreener.callToWrite(12.10, 14.0, calls)!!.strike, 1e-9)
+    }
+
+    @Test fun `next friday gives at least four days`() {
+        assertEquals(LocalDate.of(2026, 10, 16), CoveredCallScreener.nextFriday(LocalDate.of(2026, 10, 12))) // Mon
+        assertEquals(LocalDate.of(2026, 10, 23), CoveredCallScreener.nextFriday(LocalDate.of(2026, 10, 15))) // Thu
+    }
 }

@@ -11,6 +11,7 @@ import com.abeswastaken.trades.core.ledger.LedgerState
 import com.abeswastaken.trades.core.ledger.Position
 import com.abeswastaken.trades.core.market.Headline
 import com.abeswastaken.trades.core.market.Quote
+import com.abeswastaken.trades.core.model.AssetType
 import com.abeswastaken.trades.core.model.Fill
 import com.abeswastaken.trades.data.AppSettings
 import com.abeswastaken.trades.data.FillDraft
@@ -22,9 +23,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -33,6 +37,8 @@ sealed interface RecRun {
     data object Idle : RecRun
     data class Running(val step: String) : RecRun
     data class Failed(val message: String) : RecRun
+    /** Finished; the app opens the recommendation, then sets this back to Idle. */
+    data class Done(val id: Long) : RecRun
 }
 
 /** State of a longer job (market scan, screener) that reports progress. */
@@ -76,10 +82,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val recRun = MutableStateFlow<RecRun>(RecRun.Idle)
 
-    /** Prefill for the Log Fill screen. */
-    val draft = MutableStateFlow(FillDraft())
+    /** The Log Fill form. Compose state held here, so typing is synchronous and survives rotation. */
+    var draft by androidx.compose.runtime.mutableStateOf(FillDraft())
 
     val toast = MutableStateFlow<String?>(null)
+
+    /** Which Watchlist sub-tab is showing, so Home can jump straight to Reddit or Market. */
+    val watchTab = MutableStateFlow(0)
 
     private fun inThisMonth(s: SpendEntity): Boolean {
         val d = Instant.ofEpochMilli(s.ts).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -87,9 +96,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return d.year == now.year && d.month == now.month
     }
 
+    private var refreshAgain = false
+    val quotesAt = MutableStateFlow<Long?>(null)
+
     fun refreshQuotes() {
         val symbols = (ledger.value.positions.map { it.instrument.ticker } + watchlist.value).distinct()
-        if (symbols.isEmpty() || quotesLoading.value) return
+        if (symbols.isEmpty()) return
+        // A refresh asked for mid-flight (e.g. a ticker just added) runs right after, not never.
+        if (quotesLoading.value) { refreshAgain = true; return }
         quotesLoading.value = true
         viewModelScope.launch {
             try {
@@ -102,26 +116,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 quotesError.value = "Couldn't load quotes: ${e.message}"
             } finally {
                 quotesLoading.value = false
+                if (quotesError.value == null) quotesAt.value = System.currentTimeMillis()
+                if (refreshAgain) { refreshAgain = false; refreshQuotes() }
             }
         }
     }
 
-    fun loadNews(symbol: String) {
-        if (news.value.containsKey(symbol)) return
+    private val newsAt = mutableMapOf<String, Long>()
+
+    /** Headlines per ticker, kept for 15 minutes. Empty results (often a failed fetch) aren't kept. */
+    fun loadNews(symbol: String, force: Boolean = false) {
+        val fresh = System.currentTimeMillis() - (newsAt[symbol] ?: 0) < 15 * 60_000
+        if (!force && fresh && news.value[symbol]?.isNotEmpty() == true) return
         viewModelScope.launch {
             val n = runCatching { repo.news(symbol) }.getOrElse { AppLog.e("News $symbol failed", it); emptyList() }
+            if (n.isNotEmpty()) newsAt[symbol] = System.currentTimeMillis()
             news.value = news.value + (symbol to n)
         }
     }
 
-    fun recommend(model: ClaudeModel, focus: String, onDone: (Long) -> Unit) {
+    /** Runs a recommendation; the app navigates to it when [recRun] turns Done (survives rotation). */
+    fun recommend(model: ClaudeModel, focus: String) {
         if (recRun.value is RecRun.Running) return
         recRun.value = RecRun.Running("Starting")
         viewModelScope.launch {
             try {
                 val id = repo.recommend(model, focus.ifBlank { null }) { step -> recRun.value = RecRun.Running(step) }
-                recRun.value = RecRun.Idle
-                onDone(id)
+                recRun.value = RecRun.Done(id)
             } catch (e: Exception) {
                 AppLog.e("Recommendation failed", e)
                 recRun.value = RecRun.Failed(e.message ?: e.javaClass.simpleName)
@@ -130,26 +151,102 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun startDraftFromRec(rec: RecEntity): Boolean = runCatching {
-        draft.value = Repository.draftFrom(rec.id, Recommender.parse(rec.json))
+        draft = Repository.draftFrom(rec.id, Recommender.parse(rec.json))
     }.isSuccess
 
-    fun startDraft(d: FillDraft = FillDraft()) { draft.value = d }
+    fun startDraft(d: FillDraft = FillDraft()) { draft = d }
+
+    val saving = MutableStateFlow(false)
 
     fun saveDraft(d: FillDraft, onSaved: () -> Unit) {
+        if (saving.value) return
         val fill = d.toFill().getOrElse { toast.value = it.message; return }
+        saving.value = true
         viewModelScope.launch {
-            repo.addFill(fill)
-            draft.value = FillDraft()
-            toast.value = "Fill saved"
-            onSaved()
+            try {
+                if (d.editId != null) repo.updateFill(d.editId, fill) else repo.addFill(fill)
+                draft = FillDraft()
+                toast.value = if (d.editId != null) "Fill updated" else "Fill saved"
+                onSaved()
+            } catch (e: Exception) {
+                AppLog.e("Save fill failed", e)
+                toast.value = "Not saved: ${e.message}"
+            } finally {
+                saving.value = false
+            }
         }
     }
 
     fun deleteFill(id: Long) = viewModelScope.launch { repo.deleteFill(id); toast.value = "Fill deleted" }
 
-    fun expire(p: Position) = viewModelScope.launch { repo.expire(p, LocalDate.now()); toast.value = "Marked expired" }
+    private fun act(done: String, block: suspend () -> Unit) = viewModelScope.launch {
+        try {
+            block(); toast.value = done
+        } catch (e: Exception) {
+            AppLog.e("$done failed", e)
+            toast.value = e.message ?: "Failed"
+        }
+    }
 
-    fun assign(p: Position) = viewModelScope.launch { repo.assign(p, LocalDate.now()); toast.value = "Marked assigned" }
+    fun expire(p: Position, date: LocalDate) = act("Marked expired") { repo.expire(p, date) }
+
+    fun assign(p: Position, date: LocalDate) = act("Marked assigned") { repo.assign(p, date) }
+
+    fun roll(fills: List<Fill>) = act("Rolled") { repo.roll(fills) }
+
+    /** Prefills a covered call on held shares, with a strike from today's chain when Yahoo answers. */
+    val suggesting = MutableStateFlow<String?>(null)
+
+    /** A tab the app should switch to (e.g. Ledger after a CSV is shared in). */
+    val openTab = MutableStateFlow<String?>(null)
+
+    /** Set when Log Fill should open; the app navigates and clears it (safe across rotation). */
+
+    /** An option Positions should open the action sheet for (from a Home alert). */
+    val focusPosition = MutableStateFlow<com.abeswastaken.trades.core.model.Instrument?>(null)
+
+    /**
+     * Opens Log Fill at once with the covered call prefilled (ticker, CALL, SELL, contracts, next Friday),
+     * then fills in a strike and premium from today's chain when Yahoo answers, unless he's typed them already.
+     */
+    fun coveredCallDraft(p: Position, contracts: Int) {
+        val t = p.instrument.ticker
+        val start = FillDraft.coveredCall(
+            t, contracts, com.abeswastaken.trades.core.scanner.CoveredCallScreener.nextFriday(LocalDate.now()), null, null,
+            "Covered call on $contracts x 100 $t. Looking up a strike in today's chain…",
+        )
+        draft = start
+        suggesting.value = t
+        viewModelScope.launch {
+            val (q, o) = try {
+                kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { repo.suggestCall(t, p.avgCost) }
+                } ?: (null to null)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null to null
+            }
+            suggesting.value = null
+            val d = draft
+            // Only touch the form if it's still this covered call.
+            if (d.ticker != t || d.type != AssetType.CALL || d.editId != null || d.context != start.context) return@launch
+            draft = when {
+                o == null -> d.copy(context = "No chain for $t right now: enter the strike and premium Schwab filled.")
+                else -> {
+                    val ctx = if (o.strike < p.avgCost) "Nearest strike with a bid is below your cost (${"%.2f".format(p.avgCost)}): assignment would lock in a loss."
+                        else "Suggested: nearest strike above your cost and the price (${q?.price?.let { "%.2f".format(it) } ?: "?"}). " +
+                            (if (o.liveBid) "Bid ${"%.2f".format(o.bid)}." else "Market closed: premium is the last trade.") + " Use what Schwab fills."
+                    d.copy(
+                        strike = d.strike.ifBlank { o.strike.let { if (it == Math.floor(it)) it.toLong().toString() else it.toString() } },
+                        price = d.price.ifBlank { "%.2f".format(java.util.Locale.US, o.premium) },
+                        expiry = if (d.strike.isBlank()) o.expiry.toString() else d.expiry,
+                        context = ctx,
+                    )
+                }
+            }
+        }
+    }
 
     fun skip(id: Long) = viewModelScope.launch { repo.skip(id) }
 
@@ -182,7 +279,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    val scan = MutableStateFlow<Work<Repository.SavedScan>>(repo.lastScan()?.let { Work.Done(it) } ?: Work.Idle)
+    val scan = MutableStateFlow<Work<Repository.SavedScan>>(Work.Idle)
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            repo.lastScan()?.let { if (scan.value is Work.Idle) scan.value = Work.Done(it) }
+        }
+        // Quote whatever is held or watched as soon as the database answers, and again when it changes.
+        viewModelScope.launch {
+            combine(ledger, watchlist) { l, w -> (l.positions.map { it.instrument.ticker } + w).toSet() }
+                .distinctUntilChanged()
+                .collect { if (it.isNotEmpty()) refreshQuotes() }
+        }
+    }
 
     fun marketScan(model: ClaudeModel, focus: String) {
         if (scan.value is Work.Running) return
@@ -215,11 +324,106 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Adds the ticker to the watchlist and asks for a recommendation focused on it. */
-    fun askAbout(ticker: String, note: String, onDone: (Long) -> Unit) {
+    fun askAbout(ticker: String, note: String) {
         viewModelScope.launch {
             repo.addWatch(ticker)
-            recommend(settings.value.defaultModel, note, onDone)
+            recommend(settings.value.defaultModel, note)
         }
+    }
+
+    // ---- Reddit buzz ---------------------------------------------------------------------------
+
+    val buzz = MutableStateFlow<Work<Repository.Buzz>>(repo.cachedBuzz()?.let { Work.Done(it) } ?: Work.Idle)
+
+    fun loadBuzz(force: Boolean = false) {
+        if (buzz.value is Work.Running) return
+        val previous = buzz.value
+        if (!force && previous is Work.Done && System.currentTimeMillis() - previous.value.at < 10 * 60_000) return
+        buzz.value = Work.Running("Checking Reddit")
+        viewModelScope.launch {
+            buzz.value = try {
+                Work.Done(repo.buzz(force))
+            } catch (e: Exception) {
+                AppLog.e("Buzz failed", e)
+                if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    val buzzReport = MutableStateFlow<Work<Repository.SavedBuzzReport>>(Work.Idle)
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            repo.lastBuzzReport()?.let { if (buzzReport.value is Work.Idle) buzzReport.value = Work.Done(it) }
+        }
+    }
+
+    fun verifyBuzz(model: ClaudeModel) {
+        if (buzzReport.value is Work.Running) return
+        val previous = buzzReport.value
+        buzzReport.value = Work.Running("Starting")
+        viewModelScope.launch {
+            buzzReport.value = try {
+                Work.Done(repo.verifyBuzz(model) { buzzReport.value = Work.Running(it) })
+            } catch (e: Exception) {
+                AppLog.e("Reddit check failed", e)
+                toast.value = "Reddit check failed: ${e.message}"
+                if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    val tickets = MutableStateFlow<Map<String, Work<com.abeswastaken.trades.core.engine.LongShotTicket?>>>(emptyMap())
+
+    fun loadTicket(t: String) {
+        if (tickets.value[t] is Work.Running) return
+        tickets.value = tickets.value + (t to Work.Running("Pricing the cheapest call"))
+        viewModelScope.launch {
+            val w = try { Work.Done(repo.ticket(t)) } catch (e: Exception) {
+                AppLog.e("Ticket $t failed", e); Work.Failed(e.message ?: "No option chain")
+            }
+            tickets.value = tickets.value + (t to w)
+        }
+    }
+
+    val brief = MutableStateFlow<Work<Repository.Brief>>(Work.Idle)
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            repo.lastBrief()?.let { if (brief.value is Work.Idle) brief.value = Work.Done(it) }
+        }
+    }
+
+    fun loadBrief() {
+        if (brief.value is Work.Running) return
+        val previous = brief.value
+        brief.value = Work.Running("Reading the news on your names")
+        viewModelScope.launch {
+            brief.value = try { Work.Done(repo.brief()) } catch (e: Exception) {
+                AppLog.e("Brief failed", e)
+                toast.value = "Brief failed: ${e.message}"
+                if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    // ---- Schwab import -------------------------------------------------------------------------
+
+    val importPreview = MutableStateFlow<com.abeswastaken.trades.core.export.ImportPreview?>(null)
+
+    fun previewImport(text: String) = viewModelScope.launch {
+        try {
+            importPreview.value = repo.previewImport(text)
+        } catch (e: Exception) {
+            AppLog.e("Import preview failed", e)
+            toast.value = e.message ?: "Couldn't read that file"
+        }
+    }
+
+    fun confirmImport() {
+        val p = importPreview.value ?: return
+        importPreview.value = null
+        act("Imported ${p.fills.size} fill${if (p.fills.size == 1) "" else "s"}") { repo.importFills(p.fills) }
     }
 
     val newsTest = MutableStateFlow<Map<com.abeswastaken.trades.core.market.NewsSourceId, String>>(emptyMap())

@@ -2,6 +2,8 @@ package com.abeswastaken.trades.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -60,6 +62,15 @@ fun LedgerScreen(vm: AppViewModel, openLog: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Fill?>(null) }
+    val preview by vm.importPreview.collectAsState()
+    val pickCsv = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val text = runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
+            if (text == null) vm.toast.value = "Couldn't open that file" else vm.previewImport(text)
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -67,8 +78,12 @@ fun LedgerScreen(vm: AppViewModel, openLog: () -> Unit) {
                 title = { Text("Ledger") },
                 actions = {
                     Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Filled.IosShare, "Export") }
+                        IconButton(onClick = { menu = true }, modifier = Modifier.testTag("ledger_menu")) { Icon(Icons.Filled.MoreVert, "Import or export") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(text = { Text("Import from Schwab (CSV)") }, modifier = Modifier.testTag("import_schwab"), onClick = {
+                                menu = false
+                                pickCsv.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "application/vnd.ms-excel", "*/*"))
+                            })
                             DropdownMenuItem(text = { Text("Export fills (CSV)") }, onClick = {
                                 menu = false
                                 shareText(context, "fills-${LocalDate.now()}.csv", "text/csv", Csv.fills(fills))
@@ -87,9 +102,13 @@ fun LedgerScreen(vm: AppViewModel, openLog: () -> Unit) {
             }
             LazyColumn(Modifier.padding(horizontal = 16.dp)) {
                 if (tab == 0) {
-                    if (fills.isEmpty()) item { Muted("No fills yet. Tap + to log one.", Modifier.padding(top = 16.dp)) }
+                    if (fills.isEmpty()) item { Muted("No fills yet. Tap + to log one, or import a Schwab export from the ⋮ menu.", Modifier.padding(top = 16.dp)) }
+                    else item { Muted("Tap a fill to edit it, hold to delete. To close or roll an option, use Positions.", Modifier.padding(top = 10.dp)) }
                     items(fills, key = { it.id }) { f ->
-                        FillRow(f, Modifier.combinedClickable(onClick = {}, onLongClick = { deleting = f }))
+                        FillRow(f, Modifier.testTag("fill_${f.id}").combinedClickable(
+                            onClick = { vm.startDraft(com.abeswastaken.trades.data.FillDraft.edit(f)); openLog() },
+                            onLongClick = { deleting = f },
+                        ))
                         HorizontalDivider()
                     }
                 } else {
@@ -114,6 +133,30 @@ fun LedgerScreen(vm: AppViewModel, openLog: () -> Unit) {
             icon = { Icon(Icons.Filled.Add, null) },
             text = { Text("Log fill") },
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).testTag("log_fill_fab"),
+        )
+    }
+
+    preview?.let { p ->
+        AlertDialog(
+            onDismissRequest = { vm.importPreview.value = null },
+            title = { Text("Import from Schwab") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("${p.fills.size} new fill${if (p.fills.size == 1) "" else "s"} to add.", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    if (p.duplicates > 0) Muted("${p.duplicates} already in the ledger (skipped).")
+                    if (p.ignored.isNotEmpty()) Muted("Not trades, skipped: " + p.ignored.entries.joinToString(", ") { "${it.key} (${it.value})" } + ". Dividends and transfers don't change the ledger's cash; adjust starting cash if you want them counted.")
+                    p.problems.take(5).forEach { Text("Couldn't read: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    Spacer(Modifier.height(8.dp))
+                    p.fills.take(30).forEach { f ->
+                        Muted("${f.date}  ${if (f.side == Side.BUY) "Buy" else "Sell"} ${qty(f.quantity)} ${f.instrument.label} @ ${px(f.price)}${if (f.note == "Expired" || f.note == "Assigned") " (${f.note.lowercase()})" else ""}")
+                    }
+                    if (p.fills.size > 30) Muted("…and ${p.fills.size - 30} more")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.confirmImport() }, enabled = p.fills.isNotEmpty(), modifier = Modifier.testTag("import_confirm")) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { vm.importPreview.value = null }) { Text("Cancel") } },
         )
     }
 

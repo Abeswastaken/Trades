@@ -11,7 +11,7 @@ permissions:
 
 env:
   VERSION_CODE: ${{ github.run_number }}
-  VERSION_NAME: 1.1.${{ github.run_number }}
+  VERSION_NAME: 1.2.${{ github.run_number }}
 
 jobs:
   build:
@@ -31,6 +31,9 @@ jobs:
         env:
           LIVE_SMOKE: "1"
         run: ./gradlew :core:test --tests '*LiveSmokeTest*' | grep 'LIVE ' || true
+      - name: Print the Room schema (to commit under app/schemas)
+        continue-on-error: true
+        run: for f in app/schemas/*/*.json; do echo "SCHEMA $f"; cat "$f"; echo; done
       - name: Name the APKs
         run: |
           cp app/build/outputs/apk/release/app-release.apk "colvin-trades-${VERSION_NAME}.apk"

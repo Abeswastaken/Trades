@@ -34,13 +34,18 @@ class Recommender(private val llm: LlmClient) {
         useDigest: Boolean,
     ): RecResult {
         val spend = mutableListOf<SpendItem>()
-        val digest = if (useDigest) {
-            runCatching { digest(headlines) }.getOrNull()?.also { spend += it.second }?.first
-        } else {
-            // Without the digest, pass raw headlines (capped) so the news still counts.
-            headlines.entries.joinToString("\n") { (s, l) -> "$s: " + l.take(3).joinToString(" | ") { it.title } }
-                .ifBlank { null }
-        }
+        // Without a digest (off, or Haiku failed), pass raw headlines (capped) so the news still counts.
+        val raw = headlines.entries.joinToString("\n") { (s, l) -> "$s: " + l.take(3).joinToString(" | ") { it.title } }
+            .ifBlank { null }
+        val digest = if (useDigest && raw != null) {
+            try {
+                this.digest(headlines)?.also { spend += it.second }?.first ?: raw
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                raw
+            }
+        } else raw
         val r = llm.send(
             LlmRequest(
                 model = model,

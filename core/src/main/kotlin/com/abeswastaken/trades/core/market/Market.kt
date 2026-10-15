@@ -11,7 +11,12 @@ data class Quote(
     val name: String? = null,
     val nextEarnings: LocalDate? = null,
     val source: String = "",
-)
+    /** Shares traded so far today. */
+    val volume: Long? = null,
+) {
+    /** Today's volume against the 3-month average, when both are known. */
+    val volumeRatio: Double? get() = volume?.let { v -> avgVolume?.takeIf { it > 0 }?.let { v.toDouble() / it } }
+}
 
 data class OptionQuote(
     val underlying: String,

@@ -188,7 +188,10 @@ class YahooMarketData(
         private fun parseQuote(o: JsonObject): Quote? {
             val sym = o.str("symbol") ?: return null
             val price = o.num("regularMarketPrice") ?: return null
-            val earnings = (o.long("earningsTimestamp") ?: o.long("earningsTimestampStart"))?.let(::epochToDate)
+            // earningsTimestamp often still holds the last report until the next is announced: keep only upcoming dates.
+            val floor = LocalDate.now(ZoneOffset.UTC).minusDays(1)
+            val earnings = listOfNotNull(o.long("earningsTimestamp"), o.long("earningsTimestampStart"), o.long("earningsTimestampEnd"))
+                .map(::epochToDate).filter { !it.isBefore(floor) }.minOrNull()
             return Quote(
                 symbol = sym, price = price,
                 change = o.num("regularMarketChange"),
@@ -197,6 +200,7 @@ class YahooMarketData(
                 name = o.str("shortName") ?: o.str("longName"),
                 nextEarnings = earnings,
                 source = "Yahoo",
+                volume = o.long("regularMarketVolume"),
             )
         }
 
@@ -243,7 +247,27 @@ object Rss {
     private val linkRe = tag("link")
     private val dateRe = tag("pubDate")
 
+    private val entry = Regex("<entry\\b[^>]*>(.*?)</entry>", RegexOption.DOT_MATCHES_ALL)
+    private val atomLink = Regex("<link\\b[^>]*href=\"([^\"]+)\"")
+    private val atomDate = Regex("<(?:updated|published)>([^<]+)</")
+    private val category = Regex("<category\\b[^>]*label=\"([^\"]+)\"")
+
+    /** RSS 2.0 items, or Atom entries (Reddit) when there are no items. */
     fun parse(symbol: String, xml: String, source: String): List<Headline> =
+        rss(symbol, xml, source).ifEmpty { atom(symbol, xml, source) }
+
+    private fun atom(symbol: String, xml: String, source: String): List<Headline> =
+        entry.findAll(xml).mapNotNull { m ->
+            val body = m.groupValues[1]
+            val title = titleRe.find(body)?.groupValues?.get(1)?.let(::clean) ?: return@mapNotNull null
+            val date = atomDate.find(body)?.groupValues?.get(1)?.trim()?.let {
+                runCatching { java.time.OffsetDateTime.parse(it).toEpochSecond() }.getOrNull()
+            }
+            val where = category.find(body)?.groupValues?.get(1)?.let { " $it" }.orEmpty()
+            Headline(symbol, title, date, atomLink.find(body)?.groupValues?.get(1)?.let(::clean), source + where)
+        }.toList()
+
+    private fun rss(symbol: String, xml: String, source: String): List<Headline> =
         item.findAll(xml).mapNotNull { m ->
             val body = m.groupValues[1]
             val title = titleRe.find(body)?.groupValues?.get(1)?.let(::clean) ?: return@mapNotNull null

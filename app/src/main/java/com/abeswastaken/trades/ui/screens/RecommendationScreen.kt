@@ -115,6 +115,22 @@ fun RecommendationScreen(vm: AppViewModel, id: Long, back: () -> Unit, openLog: 
                         onClick = { if (vm.startDraftFromRec(rec)) openLog() },
                         modifier = Modifier.padding(top = 8.dp),
                     ) { Text("Log another fill for this") }
+                    // A buy-write: once the shares are logged, the call leg is one tap away.
+                    val p = parsed
+                    val exp = p?.expiry?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+                    val contracts = ((p?.quantity ?: 0.0) / 100).toInt()
+                    if (p != null && p.actionEnum.name == "BUY" && p.strike != null && exp != null && contracts > 0 &&
+                        linked.none { it.instrument.isOption }
+                    ) {
+                        Button(onClick = {
+                            vm.startDraft(
+                                com.abeswastaken.trades.data.FillDraft.coveredCall(
+                                    p.ticker.orEmpty(), contracts, exp, p.strike, null, "Call leg of: ${p.summary}",
+                                ).copy(recommendationId = rec.id)
+                            )
+                            openLog()
+                        }, modifier = Modifier.padding(top = 8.dp)) { Text("Log the covered call") }
+                    }
                 }
                 RecStatus.SKIPPED -> Muted("Skipped.")
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

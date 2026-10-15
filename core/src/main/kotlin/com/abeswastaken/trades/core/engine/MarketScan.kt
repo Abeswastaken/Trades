@@ -22,6 +22,9 @@ data class MarketScanContext(
     val candidates: List<MarketCandidate>,
     val headlines: List<Headline>,
     val focus: String?,
+    val risk: RiskLevel = RiskLevel.NORMAL,
+    /** Plain-code cross-checks of Reddit buzz on the candidates. */
+    val buzz: List<String> = emptyList(),
 )
 
 @Serializable
@@ -79,7 +82,8 @@ class MarketScanner(private val llm: LlmClient) {
             - Pick ONLY from the candidate list. Every candidate already passed price, volume and options rules.
             - Pick the few names (at most 6) with a real reason to watch now: a catalyst in the headlines, a
               sharp move worth fading or following, or rich premium on a name he'd be fine owning. Fewer is fine.
-            - Skip pure pump moves, pending buyouts with no upside left, and anything 100 shares of he can't afford.
+            - Follow the owner's risk setting given in the request.
+            - Skip pure pump moves (unless the risk setting is HIGH, and then call it a gamble), pending buyouts with no upside left, and anything 100 shares of he can't afford.
             - Earnings inside the next two weeks raise covered-call risk; say so.
             - idea: COVERED_CALL, BUY, or WATCH (interesting, but wait for a better entry).
             - thesis is one or two plain sentences; catalyst names the headline or event; risk is the main way
@@ -112,6 +116,14 @@ class MarketScanner(private val llm: LlmClient) {
                 append(", on: ${k.tags.joinToString(", ")}")
                 appendLine()
             }
+            if (c.buzz.isNotEmpty()) {
+                appendLine()
+                appendLine("## Reddit chatter (unverified; trust it only where price, volume or news agree)")
+                c.buzz.forEach { appendLine("- $it") }
+            }
+            appendLine()
+            appendLine("## Owner's risk setting")
+            appendLine(c.risk.rules)
             if (!c.focus.isNullOrBlank()) {
                 appendLine()
                 appendLine("## Owner's note")
@@ -179,6 +191,8 @@ object MarketCandidates {
         cash: Double,
         exclude: Set<String>,
         max: Int = 40,
+        /** More symbols to consider, with the tag to show (e.g. Reddit buzz). */
+        extra: Map<String, String> = emptyMap(),
         log: (String) -> Unit = {},
     ): List<MarketCandidate> = coroutineScope {
         val lists = LISTS.map { (id, tag) ->
@@ -193,6 +207,7 @@ object MarketCandidates {
         }
         val trend = trending.await()
         trend.forEach { s -> tagged.getOrPut(s) { null to mutableListOf() }.second += "trending" }
+        extra.forEach { (s, tag) -> tagged.getOrPut(s) { null to mutableListOf() }.second += tag }
         // Trending only gives symbols; quote the ones the screens didn't already price.
         val missing = tagged.filterValues { it.first == null }.keys.filter { looksLikeStock(it) }
         val extra = if (missing.isEmpty()) emptyMap() else runCatching { market.quotes(missing) }.getOrDefault(emptyMap())

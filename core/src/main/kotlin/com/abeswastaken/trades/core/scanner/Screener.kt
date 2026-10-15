@@ -78,6 +78,33 @@ object CoveredCallScreener {
         )
     }
 
+    /**
+     * Suggests the call to write on shares already held: the nearest strike at or above both today's price
+     * and the cost basis (so assignment never locks in a loss), with some premium on it.
+     */
+    fun callToWrite(price: Double, avgCost: Double, calls: List<OptionQuote>): OptionQuote? {
+        val floor = maxOf(price, avgCost)
+        return calls.filter { it.strike >= floor && it.premium > 0 }.minByOrNull { it.strike }
+            ?: calls.filter { it.strike >= price && it.premium > 0 }.minByOrNull { it.strike }
+    }
+
+    /**
+     * Where to roll a short call: the next expiry's same strike, or the nearest one above it, with a bid.
+     * [calls] are the next expiry's calls.
+     */
+    fun rollTo(current: com.abeswastaken.trades.core.model.Instrument, calls: List<OptionQuote>): OptionQuote? {
+        val k = current.strike ?: return null
+        val later = calls.filter { it.expiry.isAfter(current.expiry ?: LocalDate.MIN) && it.premium > 0 }
+        return later.filter { it.strike >= k - 1e-9 }.minByOrNull { it.strike }
+    }
+
+    /** The Friday at least [minDays] away: this week's if there's time, otherwise next week's. */
+    fun nextFriday(today: LocalDate, minDays: Int = 4): LocalDate {
+        var d = today.plusDays(minDays.toLong())
+        while (d.dayOfWeek != java.time.DayOfWeek.FRIDAY) d = d.plusDays(1)
+        return d
+    }
+
     fun passesUnderlying(q: Quote, rules: ScreenerRules) =
         q.price in rules.minPrice..rules.maxPrice && (q.avgVolume ?: 0) >= rules.minAvgVolume
 

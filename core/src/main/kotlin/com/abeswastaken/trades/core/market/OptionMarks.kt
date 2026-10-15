@@ -27,15 +27,17 @@ object OptionMarks {
             it.instrument.type == AssetType.CALL && it.instrument.expiry?.isBefore(today) == false
         }
         val out = mutableMapOf<Instrument, OptionMark>()
-        for ((ticker, group) in calls.groupBy { it.instrument.ticker }) {
-            val maxDte = group.maxOf { ChronoUnit.DAYS.between(today, it.instrument.expiry!!) }.toInt()
+        // One request per held expiry, so a call far out (past the first few weeklies) still gets a mark.
+        for ((key, group) in calls.groupBy { it.instrument.ticker to it.instrument.expiry!! }) {
+            val (ticker, expiry) = key
+            val dte = ChronoUnit.DAYS.between(today, expiry).toInt()
             val chain = try {
-                market.calls(ticker, today, 0, maxDte)
+                market.calls(ticker, today, dte, dte)
             } catch (e: Exception) {
-                log("Option marks for $ticker failed: ${e.message}"); continue
+                log("Option marks for $ticker $expiry failed: ${e.message}"); continue
             }
             for (p in group) {
-                val q = chain.firstOrNull { it.expiry == p.instrument.expiry && abs(it.strike - (p.instrument.strike ?: -1.0)) < 0.001 }
+                val q = chain.firstOrNull { it.expiry == expiry && abs(it.strike - (p.instrument.strike ?: -1.0)) < 0.001 }
                 if (q != null) out[p.instrument] = OptionMark(q, p)
             }
         }
