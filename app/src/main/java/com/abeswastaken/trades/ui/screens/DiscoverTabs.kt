@@ -302,7 +302,7 @@ private fun HitCard(h: ScreenerHit, cash: Double, watched: Boolean, onWatch: () 
         KeyValue("Premium", String.format(java.util.Locale.US, "%.2f%% (%.0f%% a year)", h.premiumPercent, h.annualizedPercent))
         KeyValue("If called away", String.format(java.util.Locale.US, "%.2f%%", h.ifCalledPercent))
         KeyValue("100 shares less premium", money(h.netCostPer100))
-        KeyValue("Open interest", o.openInterest.toString())
+        if (o.liveBid) KeyValue("Open interest", o.openInterest.toString())
         val notes = listOfNotNull(
             if (h.weeklies) "weeklies" else "monthlies only",
             if (!o.liveBid) "market closed: premium is the last trade" else null,

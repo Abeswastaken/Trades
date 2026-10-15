@@ -129,7 +129,7 @@ object Prompts {
             appendLine(
                 "- ${k.kind}: ${k.quote.symbol} ${o.expiry} ${px(o.strike)}C, " +
                     (if (o.liveBid) "bid ${px(o.bid)} ask ${px(o.ask)}, " else "last ${px(o.premium)} (no live bid, market closed), ") +
-                    "OI ${o.openInterest}, ${k.dte} DTE, ${pct(k.otmPercent)} OTM, premium ${pct(k.premiumPercent)} " +
+                    (if (o.liveBid) "OI ${o.openInterest}, " else "") + "${k.dte} DTE, ${pct(k.otmPercent)} OTM, premium ${pct(k.premiumPercent)} " +
                     "(${pct(k.annualizedPercent)} annualized), up to ${k.contracts} contracts" +
                     (k.quote.nextEarnings?.takeIf { !it.isAfter(o.expiry) }?.let { ", EARNINGS $it before expiry" } ?: "")
             )

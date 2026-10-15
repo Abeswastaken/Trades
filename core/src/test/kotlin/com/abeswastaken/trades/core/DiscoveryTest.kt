@@ -147,7 +147,8 @@ class DiscoveryTest {
 
     @Test fun `with the market closed the last trade stands in for the missing bid`() {
         val q = Quote("F", 12.20, avgVolume = 50_000_000)
-        val closed = OptionQuote("F", 12.5, today.plusDays(8), 0.0, 0.0, 0.11, 900, 0)
+        // Overnight Yahoo reports bid, ask and open interest as 0.
+        val closed = OptionQuote("F", 12.5, today.plusDays(8), 0.0, 0.0, 0.11, 0, 0)
         val hit = CoveredCallScreener.best(q, ChainSnapshot(weekly, listOf(closed)), today, ScreenerRules())!!
         assertFalse(hit.option.liveBid)
         assertEquals(0.11 / 12.20 * 100, hit.premiumPercent, 1e-9)

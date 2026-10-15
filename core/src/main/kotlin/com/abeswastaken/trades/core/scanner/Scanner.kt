@@ -68,7 +68,7 @@ object CoveredCallScanner {
         val dte = ChronoUnit.DAYS.between(today, o.expiry)
         if (dte < rules.minDte || dte > rules.maxDte) return false
         if (o.strike < q.price * (1 + rules.minOtmPercent / 100)) return false
-        if (o.openInterest < rules.minOpenInterest) return false
+        if (!o.meetsOpenInterest(rules.minOpenInterest)) return false
         if (o.premium < rules.minBid) return false
         if (o.premium / q.price * 100 < rules.minPremiumPercent) return false
         return true

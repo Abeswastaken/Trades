@@ -68,7 +68,7 @@ object CoveredCallScreener {
         val floor = q.price * (1 + rules.minOtmPercent / 100)
         val o = snap.calls
             .filter { ChronoUnit.DAYS.between(today, it.expiry) in rules.minDte..rules.maxDte }
-            .filter { it.strike >= floor && it.openInterest >= rules.minOpenInterest && it.premium >= rules.minBid }
+            .filter { it.strike >= floor && it.meetsOpenInterest(rules.minOpenInterest) && it.premium >= rules.minBid }
             .minByOrNull { it.strike } ?: return null
         val dte = ChronoUnit.DAYS.between(today, o.expiry).coerceAtLeast(1)
         val prem = o.premium / q.price * 100

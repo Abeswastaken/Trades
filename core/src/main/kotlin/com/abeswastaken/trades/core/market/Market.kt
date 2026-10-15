@@ -30,6 +30,9 @@ data class OptionQuote(
 
     /** What writing this call should bring in: the bid, or the last trade when the market is closed. */
     val premium get() = if (bid > 0) bid else (last ?: 0.0)
+
+    /** Yahoo also zeroes open interest overnight, so with no live quote a 0 means "unknown", not "illiquid". */
+    fun meetsOpenInterest(min: Long) = openInterest >= min || (!liveBid && openInterest == 0L)
 }
 
 data class Headline(
