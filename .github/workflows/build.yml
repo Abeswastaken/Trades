@@ -11,7 +11,7 @@ permissions:
 
 env:
   VERSION_CODE: ${{ github.run_number }}
-  VERSION_NAME: 1.1.${{ github.run_number }}
+  VERSION_NAME: 1.2.${{ github.run_number }}
 
 jobs:
   build:
