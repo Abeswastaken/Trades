@@ -20,6 +20,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,7 +48,7 @@ import java.time.format.DateTimeFormatter
 private val recDate = DateTimeFormatter.ofPattern("MMM d, h:mm a")
 
 @Composable
-fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
+fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> Unit) {
     val ledger by vm.ledger.collectAsState()
     val settings by vm.settings.collectAsState()
     val quotes by vm.quotes.collectAsState()
@@ -55,17 +56,22 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
     val realized by vm.realizedByRec.collectAsState()
     val spend by vm.spendThisMonth.collectAsState()
     val run by vm.recRun.collectAsState()
+    val marks by vm.optionMarks.collectAsState()
 
     LaunchedEffect(Unit) { vm.refreshQuotes() }
 
     var model by remember(settings.defaultModel) { mutableStateOf(settings.defaultModel) }
     var focus by rememberSaveable { mutableStateOf("") }
 
-    // Stock marked at last quote; options carried at their open price (premium) since chains aren't fetched here.
+    // Stock at last quote; options at the current mid when known, otherwise at their open price.
     val stockValue = ledger.positions.filter { it.instrument.type == AssetType.STOCK }.sumOf { p ->
         (quotes[p.instrument.ticker]?.price ?: p.avgCost) * p.quantity
     }
-    val optionValue = ledger.positions.filter { it.instrument.isOption }.sumOf { it.basis }
+    val optionValue = ledger.positions.filter { it.instrument.isOption }.sumOf { p ->
+        marks[p.instrument]?.let { it.mark * p.quantity * 100 } ?: p.basis
+    }
+    val today = LocalDate.now()
+    val pastExpiry = ledger.positions.filter { p -> p.instrument.expiry?.isBefore(today) == true }
     val equity = ledger.cash + stockValue + optionValue
     val now = LocalDate.now()
     val monthRealized = ledger.realizedBetween(now.withDayOfMonth(1), now)
@@ -94,6 +100,15 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
                 if (settings.startingCash == 0.0) {
                     Muted("Set your starting cash in Settings so cash and buying power are right.", Modifier.padding(top = 6.dp))
                 }
+            }
+        }
+
+        if (pastExpiry.isNotEmpty()) item {
+            InfoCard(Modifier.padding(top = 12.dp)) {
+                Text("Options past expiry", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                pastExpiry.forEach { Text(it.instrument.label) }
+                Muted("Mark each one Expired or Assigned so cash and positions are right before asking Claude.")
+                TextButton(onClick = openPositions) { Text("Go to Positions") }
             }
         }
 

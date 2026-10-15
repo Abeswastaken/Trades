@@ -40,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.abeswastaken.trades.core.export.Csv
@@ -112,7 +113,7 @@ fun LedgerScreen(vm: AppViewModel, openLog: () -> Unit) {
             onClick = { vm.startDraft(); openLog() },
             icon = { Icon(Icons.Filled.Add, null) },
             text = { Text("Log fill") },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).testTag("log_fill_fab"),
         )
     }
 

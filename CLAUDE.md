@@ -21,10 +21,10 @@ Terse and direct. Has accepted that LLM picks are "educated friend", not edge; d
 ## Layout
 - `core/` is pure Kotlin (testable without Android): `model/`, `ledger/`, `market/` (Yahoo with crumb + Finnhub fallback), `scanner/`, `engine/` (prompts, schema, Anthropic Java SDK client, recommender), `export/`.
 - `app/` is Android: `data/` (Room, settings with Keystore-encrypted key, repository, backup), `ui/` (Compose screens), `util/AppLog.kt` (file log viewable in Settings).
-- Builds happen in GitHub Actions; `main` publishes a prerelease with the APK.
+- Builds happen in GitHub Actions: JVM tests, emulator tests (`app/src/androidTest`), then `main` publishes a Release with the APK. Release builds are signed with the same committed key as debug.
 
 ## Known limits / parked
-- Option positions aren't marked to market (stock is); options show premium and DTE.
+- Option marks cover calls only (Yahoo chain call); puts show premium and DTE.
 - Wash sale is a flag plus disallowed amount, not a basis-adjustment engine.
 - Yahoo endpoints are unofficial; Finnhub only backs up quotes and news, not chains.
 - Parked: push alerts, "Brief me on X", Schwab CSV import, widget.

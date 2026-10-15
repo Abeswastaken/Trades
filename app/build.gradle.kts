@@ -16,11 +16,12 @@ android {
         // CI passes the run number so every build is a higher version and installs over the last.
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
-        // One shared debug key, committed on purpose: every CI build is signed the same way, so a new
-        // APK installs over the old one and the ledger on the phone survives.
+        // One shared key, committed on purpose: debug and release builds are signed the same way, so any
+        // new APK installs over the old one and the ledger on the phone survives.
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
@@ -31,7 +32,10 @@ android {
 
     buildTypes {
         debug { signingConfig = signingConfigs.getByName("debug") }
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -71,4 +75,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.okhttp.mockwebserver)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }

@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.abeswastaken.trades.core.ledger.Position
+import com.abeswastaken.trades.core.market.OptionMark
 import com.abeswastaken.trades.core.market.Quote
 import com.abeswastaken.trades.core.model.AssetType
 import com.abeswastaken.trades.core.model.Side
@@ -48,6 +49,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     val quotes by vm.quotes.collectAsState()
     val loading by vm.quotesLoading.collectAsState()
     val error by vm.quotesError.collectAsState()
+    val marks by vm.optionMarks.collectAsState()
     var confirm by remember { mutableStateOf<Pair<String, Position>?>(null) }
 
     // Mark to market every time the screen opens.
@@ -56,6 +58,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     val stocks = ledger.positions.filter { it.instrument.type == AssetType.STOCK }
     val options = ledger.positions.filter { it.instrument.isOption }.sortedBy { it.instrument.expiry }
     val unrealized = stocks.sumOf { p -> quotes[p.instrument.ticker]?.let { (it.price - p.avgCost) * p.quantity } ?: 0.0 }
+    val optionUnrealized = options.sumOf { marks[it.instrument]?.unrealized ?: 0.0 }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -69,6 +72,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
                 InfoCard {
                     KeyValue("Cash", money(ledger.cash))
                     KeyValue("Unrealized on stock", signedMoney(unrealized), pnlColor(unrealized))
+                    if (marks.isNotEmpty()) KeyValue("Unrealized on options", signedMoney(optionUnrealized), pnlColor(optionUnrealized))
                     KeyValue("Realized all time", signedMoney(ledger.realizedTotal), pnlColor(ledger.realizedTotal))
                     if (loading) Muted("Updating quotes…")
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -82,7 +86,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
             if (options.isEmpty()) item { Muted("No open options.") }
             items(options, key = { it.instrument.label }) { p ->
                 OptionRow(
-                    p, quotes[p.instrument.ticker],
+                    p, quotes[p.instrument.ticker], marks[p.instrument],
                     onClose = {
                         vm.startDraft(
                             FillDraft(
@@ -144,7 +148,7 @@ private fun StockRow(p: Position, q: Quote?, coverable: Int) {
 }
 
 @Composable
-private fun OptionRow(p: Position, q: Quote?, onClose: () -> Unit, onExpire: () -> Unit, onAssign: () -> Unit) {
+private fun OptionRow(p: Position, q: Quote?, mark: OptionMark?, onClose: () -> Unit, onExpire: () -> Unit, onAssign: () -> Unit) {
     val inst = p.instrument
     val dte = inst.expiry?.let { ChronoUnit.DAYS.between(LocalDate.now(), it) }
     val short = p.quantity < 0
@@ -153,6 +157,11 @@ private fun OptionRow(p: Position, q: Quote?, onClose: () -> Unit, onExpire: () 
         KeyValue(if (short) "Short contracts" else "Long contracts", qty(abs(p.quantity)))
         KeyValue(if (short) "Premium received" else "Premium paid", "${px(p.avgCost)} (${money(abs(p.basis))})")
         dte?.let { KeyValue("Days to expiry", if (it < 0) "expired ${-it}d ago" else it.toString()) }
+        mark?.let { m ->
+            KeyValue("Now (bid / ask)", "${px(m.quote.bid)} / ${px(m.quote.ask)}")
+            KeyValue("Unrealized", signedMoney(m.unrealized), pnlColor(m.unrealized), bold = true)
+            m.premiumCapturedPercent?.let { KeyValue("Premium captured", String.format(java.util.Locale.US, "%.0f%%", it)) }
+        }
         q?.let { s ->
             KeyValue("Stock", px(s.price))
             if (inst.type == AssetType.CALL && short && inst.strike != null && s.price >= inst.strike!!) {

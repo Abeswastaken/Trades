@@ -75,3 +75,36 @@ class ScannerTest {
         assertEquals(setOf("BROKEN", "GONE"), r.errors.keys)
     }
 }
+
+class OptionMarksTest {
+    @Test fun `marks open short calls and reports premium captured, and the prompt shows it`() = runBlocking {
+        val today = LocalDate.of(2026, 10, 15)
+        val exp = LocalDate.of(2026, 10, 30)
+        val call = Instrument.call("F", 13.5, exp)
+        val ledger = Ledger.compute(
+            listOf(Fill(1, today, Instrument.stock("F"), Side.BUY, 300.0, 12.08), Fill(2, today, call, Side.SELL, 3.0, 0.14)),
+            5000.0,
+        )
+        var asked: Pair<Int, Int>? = null
+        val market = object : MarketData {
+            override val name = "fake"
+            override suspend fun quotes(symbols: List<String>) = emptyMap<String, Quote>()
+            override suspend fun calls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): List<OptionQuote> {
+                asked = minDte to maxDte
+                return listOf(OptionQuote("F", 13.5, exp, 0.03, 0.05, null, 900, 10), OptionQuote("F", 14.0, exp, 0.01, 0.02, null, 9, 1))
+            }
+            override suspend fun news(symbol: String, limit: Int) = emptyList<Headline>()
+        }
+        val marks = com.abeswastaken.trades.core.market.OptionMarks.fetch(market, ledger.positions, today)
+        assertEquals(0 to 15, asked)
+        val m = marks[call]!!
+        assertEquals(0.04, m.mark, 1e-9)
+        assertEquals(30.0, m.unrealized, 1e-9) // (0.04 - 0.14) * -3 * 100
+        assertEquals(71.43, m.premiumCapturedPercent!!, 0.01)
+
+        val ctx = com.abeswastaken.trades.core.engine.RecContext(
+            today, ledger, 5000.0, emptyMap(), emptyList(), null, emptyList(), null, emptyList(), marks,
+        )
+        assertTrue(com.abeswastaken.trades.core.engine.Prompts.recommendRequest(ctx).contains("71.4% of premium captured"))
+    }
+}

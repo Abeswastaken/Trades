@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.abeswastaken.trades.core.engine.AnthropicLlm
 import com.abeswastaken.trades.core.engine.ClaudeModel
 import com.abeswastaken.trades.core.engine.LlmException
+import com.abeswastaken.trades.core.engine.LlmRequest
 import com.abeswastaken.trades.core.engine.PastRec
 import com.abeswastaken.trades.core.engine.RecContext
 import com.abeswastaken.trades.core.engine.Recommendation
@@ -16,6 +17,8 @@ import com.abeswastaken.trades.core.market.FallbackMarketData
 import com.abeswastaken.trades.core.market.FinnhubMarketData
 import com.abeswastaken.trades.core.market.Headline
 import com.abeswastaken.trades.core.market.MarketData
+import com.abeswastaken.trades.core.market.OptionMark
+import com.abeswastaken.trades.core.market.OptionMarks
 import com.abeswastaken.trades.core.market.Quote
 import com.abeswastaken.trades.core.market.YahooMarketData
 import com.abeswastaken.trades.core.model.AssetType
@@ -97,6 +100,29 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
 
     suspend fun news(symbol: String): List<Headline> = market().news(symbol, 8)
 
+    suspend fun optionMarks(positions: List<Position>): Map<Instrument, OptionMark> =
+        OptionMarks.fetch(market(), positions, LocalDate.now(ZoneId.of("America/New_York"))) { AppLog.i(it) }
+
+    /** One tiny Haiku call (a fraction of a cent) to prove the key works. */
+    suspend fun testAnthropicKey(): String {
+        val key = settings.apiKey() ?: return "No key saved."
+        return try {
+            val r = AnthropicLlm(key).send(LlmRequest(ClaudeModel.HAIKU, "Reply with the single word OK.", "ping", 256, "low"))
+            "Key works (answered by ${r.servedModel})."
+        } catch (e: Exception) {
+            AppLog.e("Key test failed", e)
+            e.message ?: "Key test failed."
+        }
+    }
+
+    suspend fun testFinnhubKey(key: String): String = try {
+        val q = FinnhubMarketData(key.trim(), http).quotes(listOf("AAPL"))
+        if (q.isEmpty()) "Finnhub answered but returned no quote." else "Key works (AAPL ${"%.2f".format(q.values.first().price)})."
+    } catch (e: Exception) {
+        AppLog.e("Finnhub test failed", e)
+        "Finnhub rejected the key: ${e.message}"
+    }
+
     // ---- Recommendations -----------------------------------------------------------------------
 
     suspend fun skip(recId: Long) = dao.setRecStatus(recId, RecStatus.SKIPPED)
@@ -141,6 +167,9 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
             }.awaitAll().toMap()
         }
 
+        onProgress("Pricing open options")
+        val marks = OptionMarks.fetch(market, ledger.positions, today) { AppLog.i(it) }
+
         val realized = realizedByRec(ledger, fills)
         val history = dao.allRecs().sortedByDescending { it.createdAt }.take(10).map {
             PastRec(
@@ -152,10 +181,10 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
         val ctx = RecContext(
             today = today, ledger = ledger, startingCash = s.startingCash, quotes = quotes,
             candidates = scan.candidates, newsDigest = null, history = history, focus = focus,
-            watchlist = watch,
+            watchlist = watch, optionMarks = marks,
         )
         onProgress(if (s.useNewsDigest) "Asking Claude (news digest, then ${model.label})" else "Asking ${model.label}")
-        val result = Recommender(AnthropicLlm(key)).recommend(model, ctx, headlines, s.useNewsDigest)
+        val result = Recommender(AnthropicLlm(key, onDowngrade = { AppLog.i(it) })).recommend(model, ctx, headlines, s.useNewsDigest)
 
         val now = System.currentTimeMillis()
         val id = dao.insertRec(

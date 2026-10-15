@@ -20,6 +20,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -73,6 +74,7 @@ fun TradesApp(vm: AppViewModel) {
                                 }
                             },
                             icon = { Icon(t.icon, contentDescription = t.label) },
+                            modifier = Modifier.testTag("tab_${t.route}"),
                             label = { Text(t.label) },
                         )
                     }
@@ -81,7 +83,17 @@ fun TradesApp(vm: AppViewModel) {
         },
     ) { pad ->
         NavHost(nav, startDestination = "home", modifier = Modifier.padding(pad)) {
-            composable("home") { HomeScreen(vm, openRec = { nav.navigate("rec/$it") }) }
+            composable("home") {
+                HomeScreen(
+                    vm, openRec = { nav.navigate("rec/$it") },
+                    openPositions = {
+                        nav.navigate("positions") {
+                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            }
             composable("positions") { PositionsScreen(vm, openLog = { nav.navigate("log") }) }
             composable("ledger") { LedgerScreen(vm, openLog = { nav.navigate("log") }) }
             composable("watch") { WatchlistScreen(vm) }

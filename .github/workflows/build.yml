@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  VERSION_CODE: ${{ github.run_number }}
+  VERSION_NAME: 1.0.${{ github.run_number }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,23 +23,64 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - name: Tests and debug APK
-        env:
-          VERSION_CODE: ${{ github.run_number }}
-          VERSION_NAME: 1.0.${{ github.run_number }}
-        run: ./gradlew :core:test testDebugUnitTest assembleDebug
-      - name: Name the APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk "colvin-trades-1.0.${{ github.run_number }}-debug.apk"
+      - name: Unit tests, debug and release APKs
+        run: ./gradlew :core:test testDebugUnitTest assembleDebug assembleRelease
+      - name: Name the APKs
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "colvin-trades-${VERSION_NAME}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "colvin-trades-${VERSION_NAME}-debug.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: colvin-trades-debug
-          path: colvin-trades-*-debug.apk
-      # Every build of main becomes a downloadable release, so the APK can be grabbed straight from a phone.
-      - name: Publish build from main
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+          name: colvin-trades
+          path: colvin-trades-*.apk
+
+  # Boots a real Android emulator and runs the on-device tests (SDK, Keystore, backup, and a UI walk-through).
+  device-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Colvin Trades 1.0.${{ github.run_number }}
-          prerelease: true
-          files: colvin-trades-*-debug.apk
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Instrumented tests on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: ./gradlew connectedDebugAndroidTest
+      - name: Keep test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-test-report
+          path: app/build/reports/androidTests/
+
+  # Every build of main that passes both jobs becomes a release with a direct APK download.
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [build, device-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: colvin-trades
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: Colvin Trades ${{ env.VERSION_NAME }}
+          make_latest: true
+          body: |
+            Install `colvin-trades-${{ env.VERSION_NAME }}.apk` over the previous version (don't uninstall: that wipes the ledger).
+            The `-debug` APK is the same app with debugging on; you only need one.
+          files: colvin-trades-*.apk

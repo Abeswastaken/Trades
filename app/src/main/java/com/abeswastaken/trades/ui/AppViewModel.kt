@@ -62,6 +62,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val quotesError = MutableStateFlow<String?>(null)
     val quotesLoading = MutableStateFlow(false)
 
+    val optionMarks = MutableStateFlow<Map<com.abeswastaken.trades.core.model.Instrument, com.abeswastaken.trades.core.market.OptionMark>>(emptyMap())
+
     val news = MutableStateFlow<Map<String, List<Headline>>>(emptyMap())
 
     val recRun = MutableStateFlow<RecRun>(RecRun.Idle)
@@ -85,6 +87,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 quotes.value = quotes.value + repo.quotes(symbols)
                 quotesError.value = null
+                val options = ledger.value.positions.filter { it.instrument.isOption }
+                if (options.isNotEmpty()) optionMarks.value = repo.optionMarks(options)
             } catch (e: Exception) {
                 AppLog.e("Quote refresh failed", e)
                 quotesError.value = "Couldn't load quotes: ${e.message}"
@@ -148,4 +152,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSettings(block: AppSettings.() -> AppSettings) = repo.settings.update(block)
 
     fun setApiKey(k: String?) = repo.settings.setApiKey(k)
+
+    val keyTest = MutableStateFlow<String?>(null)
+
+    fun testAnthropicKey() {
+        keyTest.value = "Testing…"
+        viewModelScope.launch { keyTest.value = repo.testAnthropicKey() }
+    }
+
+    val finnhubTest = MutableStateFlow<String?>(null)
+
+    fun testFinnhubKey(key: String) {
+        finnhubTest.value = "Testing…"
+        viewModelScope.launch { finnhubTest.value = repo.testFinnhubKey(key) }
+    }
 }

@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -83,7 +84,7 @@ fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
 
             OutlinedTextField(
                 d.ticker, { d = d.copy(ticker = it.uppercase()) }, label = { Text("Ticker") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                singleLine = true, modifier = Modifier.fillMaxWidth().testTag("field_ticker"),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
             )
             if (d.type != AssetType.STOCK) {
@@ -96,8 +97,8 @@ fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NumberField(d.quantity, { d = d.copy(quantity = it) }, if (d.type == AssetType.STOCK) "Shares" else "Contracts", Modifier.weight(1f))
-                NumberField(d.price, { d = d.copy(price = it) }, if (d.type == AssetType.STOCK) "Price" else "Premium / share", Modifier.weight(1f))
+                NumberField(d.quantity, { d = d.copy(quantity = it) }, if (d.type == AssetType.STOCK) "Shares" else "Contracts", Modifier.weight(1f).testTag("field_qty"))
+                NumberField(d.price, { d = d.copy(price = it) }, if (d.type == AssetType.STOCK) "Price" else "Premium / share", Modifier.weight(1f).testTag("field_price"))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 NumberField(d.fees, { d = d.copy(fees = it) }, "Fees", Modifier.weight(1f))
@@ -111,7 +112,7 @@ fun LogFillScreen(vm: AppViewModel, done: () -> Unit) {
             preview.onSuccess { f -> Muted("Cash effect: ${signedMoney(f.cashFlow)}") }
                 .onFailure { Muted(it.message ?: "") }
 
-            Button(onClick = { vm.saveDraft(d, done) }, enabled = preview.isSuccess, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { vm.saveDraft(d, done) }, enabled = preview.isSuccess, modifier = Modifier.fillMaxWidth().testTag("save_fill")) {
                 Text("Save fill")
             }
             Spacer(Modifier.height(32.dp))

@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -58,6 +59,9 @@ fun SettingsScreen(vm: AppViewModel) {
     var finnhub by remember(s.finnhubKey) { mutableStateOf(s.finnhubKey) }
     var showLog by remember { mutableStateOf(false) }
     var confirmImport by remember { mutableStateOf<String?>(null) }
+    val keyTest by vm.keyTest.collectAsState()
+    val finnhubTest by vm.finnhubTest.collectAsState()
+    val links = LocalUriHandler.current
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -91,8 +95,14 @@ fun SettingsScreen(vm: AppViewModel) {
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                     Button(onClick = { vm.setApiKey(key); key = ""; vm.toast.value = "Key saved" }, enabled = key.startsWith("sk-")) { Text("Save key") }
-                    if (s.hasApiKey) OutlinedButton(onClick = { vm.setApiKey(null) }) { Text("Remove") }
+                    if (s.hasApiKey) OutlinedButton(onClick = { vm.testAnthropicKey() }) { Text("Test") }
+                    if (s.hasApiKey) TextButton(onClick = { vm.setApiKey(null) }) { Text("Remove") }
                 }
+                keyTest?.let { Muted(it, Modifier.padding(top = 4.dp)) }
+                LinkRow("Get a key (Anthropic Console)", "https://console.anthropic.com/settings/keys") { links.openUri(it) }
+                LinkRow("Add credit / check billing", "https://console.anthropic.com/settings/billing") { links.openUri(it) }
+                LinkRow("Usage and spend", "https://console.anthropic.com/usage") { links.openUri(it) }
+                Muted("Required. Pay-as-you-go: a Sonnet recommendation costs a few cents.")
                 Spacer(Modifier.height(12.dp))
                 Text("Default model", style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -131,7 +141,14 @@ fun SettingsScreen(vm: AppViewModel) {
                     finnhub, { finnhub = it.trim() }, label = { Text("Finnhub API key (optional)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
-                Button(onClick = { vm.updateSettings { copy(finnhubKey = finnhub) }; vm.toast.value = "Saved" }, modifier = Modifier.padding(top = 8.dp)) { Text("Save") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    Button(onClick = { vm.updateSettings { copy(finnhubKey = finnhub) }; vm.toast.value = "Saved" }) { Text("Save") }
+                    OutlinedButton(onClick = { vm.testFinnhubKey(finnhub) }, enabled = finnhub.isNotBlank()) { Text("Test") }
+                }
+                finnhubTest?.let { Muted(it, Modifier.padding(top = 4.dp)) }
+                LinkRow("Get a free Finnhub key", "https://finnhub.io/register") { links.openUri(it) }
+                LinkRow("Finnhub dashboard (your key)", "https://finnhub.io/dashboard") { links.openUri(it) }
+                Muted("Optional. Free tier: 60 calls a minute, enough for this app.")
             }
 
             SectionTitle("Covered-call scanner")
@@ -255,5 +272,12 @@ private fun RulePair(a: String, av: String, onA: (String) -> Unit, b: String, bv
             bv, onB, label = { Text(b) }, singleLine = true, modifier = Modifier.weight(1f),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         )
+    }
+}
+
+@Composable
+private fun LinkRow(label: String, url: String, open: (String) -> Unit) {
+    TextButton(onClick = { open(url) }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+        Text("$label ↗")
     }
 }

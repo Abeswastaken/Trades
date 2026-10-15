@@ -27,6 +27,7 @@ data class RecContext(
     val history: List<PastRec>,
     val focus: String?,
     val watchlist: List<String>,
+    val optionMarks: Map<com.abeswastaken.trades.core.model.Instrument, com.abeswastaken.trades.core.market.OptionMark> = emptyMap(),
 )
 
 object Prompts {
@@ -98,7 +99,11 @@ object Prompts {
                 appendLine(
                     "- ${inst.label}: $side ${num(kotlin.math.abs(p.quantity))} contracts at ${px(p.avgCost)}" +
                         (dte?.let { ", $it days to expiry" } ?: "") +
-                        (c.quotes[inst.ticker]?.let { ", stock last ${px(it.price)}" } ?: "")
+                        (c.quotes[inst.ticker]?.let { ", stock last ${px(it.price)}" } ?: "") +
+                        (c.optionMarks[inst]?.let { m ->
+                            ", now bid ${px(m.quote.bid)} ask ${px(m.quote.ask)}" +
+                                (m.premiumCapturedPercent?.let { ", ${pct(it)} of premium captured" } ?: "")
+                        } ?: ", no current option quote")
                 )
             }
         }
@@ -153,7 +158,9 @@ object Prompts {
 
     /** JSON schema for structured output; mirrors [Recommendation]. */
     val RECOMMENDATION_SCHEMA: Map<String, Any> = run {
-        fun nullable(type: String, desc: String) = mapOf("type" to listOf(type, "null"), "description" to desc)
+        // anyOf with null is the most widely supported way to express "optional" in structured outputs.
+        fun nullable(type: String, desc: String) =
+            mapOf("anyOf" to listOf(mapOf("type" to type), mapOf("type" to "null")), "description" to desc)
         mapOf(
             "type" to "object",
             "additionalProperties" to false,

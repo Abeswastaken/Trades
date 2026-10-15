@@ -3,7 +3,16 @@
 A personal Android app for one experiment: one Schwab account trades only on what Claude recommends, another on Jake's own picks, and the two balances get compared at month-end. The app gathers the context, asks Claude for **one** recommendation at a time, shows the math, and Jake places the order in Schwab by hand. It never places orders and never connects to a broker.
 
 ## Install
-Every push to `main` builds a debug APK and publishes it under [Releases](../../releases). Download it on the phone and install over the previous version. Builds are all signed with the same key (`app/debug.keystore`), so updating keeps the ledger. **Never uninstall**: that wipes the ledger. Back up first from Settings if in doubt.
+Every push to `main` that passes all tests (including the on-emulator ones) publishes an APK under [Releases](../../releases). Download it on the phone and install over the previous version. Builds are all signed with the same key (`app/debug.keystore`), so updating keeps the ledger. **Never uninstall**: that wipes the ledger. Back up first from Settings if in doubt.
+
+## API keys
+| Key | Needed? | Get it | Cost |
+|---|---|---|---|
+| Anthropic (Claude) | **Required** | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) (add credit under [Billing](https://console.anthropic.com/settings/billing)) | Pay as you go, a few cents per Sonnet recommendation |
+| Finnhub | Optional backup for quotes and news | [finnhub.io/register](https://finnhub.io/register), then copy the key from the [dashboard](https://finnhub.io/dashboard) | Free tier is enough |
+| Yahoo Finance | No key | n/a | Free |
+
+Both keys go in Settings, which has the same links and a **Test** button for each.
 
 ## First run
 1. **Settings > Claude:** paste an Anthropic API key. It's stored encrypted with the Android Keystore.
@@ -30,7 +39,7 @@ Every push to `main` builds a debug APK and publishes it under [Releases](../../
 ## Code
 - `core/` is pure Kotlin with no Android: ledger, scanner, market data, prompts, and the Claude client (official Anthropic Java SDK). Tests: `./gradlew -p core test`, which runs without the Android SDK.
 - `app/` is Jetpack Compose with Room.
-- CI (`.github/workflows/build.yml`) runs all tests and builds the APK.
+- CI (`.github/workflows/build.yml`) runs the JVM tests, boots an Android emulator for the on-device tests (SDK, Keystore, backup, UI walk-through), and builds the APKs.
 
 ## Hard lines
 No auto-execution, no broker API, no in-app scoreboard. See `CLAUDE.md`.
