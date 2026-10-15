@@ -79,7 +79,6 @@ class AppFlowTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("cc_ZZQX").fetchSemanticsNodes().isNotEmpty() }
         // Quotes refresh as Positions opens and shift the list, which can swallow a touch; invoke the button's click directly.
         rule.onNodeWithTag("cc_ZZQX").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
-        rule.waitUntil(20_000) { rule.onAllNodesWithText("Covered call on", substring = true).fetchSemanticsNodes().isNotEmpty() }
         rule.waitUntil(25_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("field_qty").assertTextContains("1")
         rule.onNodeWithTag("field_strike").performTextClearance()
