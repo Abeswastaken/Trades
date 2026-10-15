@@ -16,7 +16,9 @@ import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -32,7 +34,7 @@ class YahooMarketData(
     private val queryBase: String = "https://query2.finance.yahoo.com",
     private val cookieUrl: String = "https://fc.yahoo.com",
     private val rssBase: String = "https://feeds.finance.yahoo.com",
-) : MarketData {
+) : MarketData, Discovery {
     override val name = "Yahoo"
 
     private val cookies = mutableListOf<Cookie>()
@@ -71,7 +73,7 @@ class YahooMarketData(
         }.also { crumb = it }
     }
 
-    private suspend fun getJson(path: String, params: Map<String, String>): JsonObject {
+    private suspend fun getJson(path: String, params: Map<String, String>, postJson: String? = null): JsonObject {
         for (attempt in 0..1) {
             val c = crumb(force = attempt > 0)
             val url = "$queryBase$path".toHttpUrl().newBuilder().apply {
@@ -79,7 +81,10 @@ class YahooMarketData(
                 addQueryParameter("crumb", c)
             }.build()
             val (code, body) = withContext(Dispatchers.IO) {
-                client.newCall(Request.Builder().url(url).build()).execute().use { it.code to it.body?.string().orEmpty() }
+                val req = Request.Builder().url(url).apply {
+                    if (postJson != null) post(postJson.toRequestBody("application/json".toMediaType()))
+                }.build()
+                client.newCall(req).execute().use { it.code to it.body?.string().orEmpty() }
             }
             if (code == 401 || code == 403) continue
             if (code !in 200..299) throw MarketDataException("Yahoo $path returned $code")
@@ -111,6 +116,43 @@ class YahooMarketData(
         }
     }
 
+    override suspend fun screen(minPrice: Double, maxPrice: Double, minAvgVolume: Long, size: Int): List<Quote> {
+        val body = """
+            {"offset":0,"size":$size,"sortField":"dayvolume","sortType":"DESC","quoteType":"EQUITY",
+             "query":{"operator":"AND","operands":[
+               {"operator":"eq","operands":["region","us"]},
+               {"operator":"btwn","operands":["intradayprice",$minPrice,$maxPrice]},
+               {"operator":"gt","operands":["avgdailyvol3m",$minAvgVolume]}]},
+             "userId":"","userIdType":"guid"}
+        """.trimIndent()
+        val root = getJson("/v1/finance/screener", mapOf("lang" to "en-US", "region" to "US", "formatted" to "false"), body)
+        return parseScreener(root)
+    }
+
+    override suspend fun predefined(list: String, size: Int): List<Quote> =
+        parseScreener(getJson("/v1/finance/screener/predefined/saved", mapOf("scrIds" to list, "count" to size.toString(), "formatted" to "false")))
+
+    override suspend fun trending(size: Int): List<String> {
+        val root = getJson("/v1/finance/trending/US", mapOf("count" to size.toString()))
+        return root.obj("finance")?.arr("result")?.firstOrNull()?.jsonObject?.arr("quotes").orEmpty()
+            .mapNotNull { it.jsonObject.str("symbol") }
+    }
+
+    override suspend fun nearestCalls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): ChainSnapshot {
+        val first = getJson("/v7/finance/options/$symbol", emptyMap())
+        val result = first.obj("optionChain")?.arr("result")?.firstOrNull()?.jsonObject
+            ?: throw MarketDataException("No options chain for $symbol")
+        val exps = result.arr("expirationDates").orEmpty().mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+        val dates = exps.map(::epochToDate)
+        val pick = exps.firstOrNull { ChronoUnit.DAYS.between(today, epochToDate(it)) in minDte..maxDte }
+            ?: return ChainSnapshot(dates, emptyList())
+        // The first page already holds the nearest expiry; only fetch again for a later one.
+        val firstCalls = parseCalls(symbol, first)
+        val calls = if (firstCalls.isNotEmpty() && firstCalls.first().expiry == epochToDate(pick)) firstCalls
+            else parseCalls(symbol, getJson("/v7/finance/options/$symbol", mapOf("date" to pick.toString())))
+        return ChainSnapshot(dates, calls)
+    }
+
     override suspend fun news(symbol: String, limit: Int): List<Headline> {
         val url = "$rssBase/rss/2.0/headline".toHttpUrl().newBuilder()
             .addQueryParameter("s", symbol).addQueryParameter("region", "US").addQueryParameter("lang", "en-US").build()
@@ -132,22 +174,31 @@ class YahooMarketData(
         fun epochToDate(epoch: Long): LocalDate = Instant.ofEpochSecond(epoch).atZone(ZoneOffset.UTC).toLocalDate()
 
         internal fun parseQuotes(root: JsonObject): List<Quote> =
-            root.obj("quoteResponse")?.arr("result").orEmpty().mapNotNull { el ->
-                val o = el.jsonObject
-                val sym = o.str("symbol") ?: return@mapNotNull null
-                val price = o.num("regularMarketPrice") ?: return@mapNotNull null
-                val earnings = (o.long("earningsTimestamp") ?: o.long("earningsTimestampStart"))
-                    ?.let(::epochToDate)
-                Quote(
-                    symbol = sym, price = price,
-                    change = o.num("regularMarketChange"),
-                    changePercent = o.num("regularMarketChangePercent"),
-                    avgVolume = o.long("averageDailyVolume3Month") ?: o.long("averageDailyVolume10Day"),
-                    name = o.str("shortName") ?: o.str("longName"),
-                    nextEarnings = earnings,
-                    source = "Yahoo",
-                )
+            root.obj("quoteResponse")?.arr("result").orEmpty().mapNotNull { parseQuote(it.jsonObject) }
+
+        /** Screener replies carry the same quote objects under finance.result[0].quotes. */
+        internal fun parseScreener(root: JsonObject): List<Quote> {
+            root.obj("finance")?.obj("error")?.let { e ->
+                throw MarketDataException("Yahoo screener: ${e.str("description") ?: e.str("code") ?: "error"}")
             }
+            return root.obj("finance")?.arr("result")?.firstOrNull()?.jsonObject?.arr("quotes").orEmpty()
+                .mapNotNull { parseQuote(it.jsonObject) }
+        }
+
+        private fun parseQuote(o: JsonObject): Quote? {
+            val sym = o.str("symbol") ?: return null
+            val price = o.num("regularMarketPrice") ?: return null
+            val earnings = (o.long("earningsTimestamp") ?: o.long("earningsTimestampStart"))?.let(::epochToDate)
+            return Quote(
+                symbol = sym, price = price,
+                change = o.num("regularMarketChange"),
+                changePercent = o.num("regularMarketChangePercent"),
+                avgVolume = o.long("averageDailyVolume3Month") ?: o.long("averageDailyVolume10Day"),
+                name = o.str("shortName") ?: o.str("longName"),
+                nextEarnings = earnings,
+                source = "Yahoo",
+            )
+        }
 
         internal fun parseCalls(symbol: String, root: JsonObject): List<OptionQuote> {
             val result = root.obj("optionChain")?.arr("result")?.firstOrNull()?.jsonObject ?: return emptyList()
@@ -185,8 +236,9 @@ internal fun JsonObject.long(key: String): Long? = when (val v = this[key]) {
 
 /** Minimal RSS 2.0 item parser; avoids pulling an XML stack into the shared module. */
 object Rss {
-    private val item = Regex("<item>(.*?)</item>", RegexOption.DOT_MATCHES_ALL)
-    private fun tag(name: String) = Regex("<$name>(.*?)</$name>", RegexOption.DOT_MATCHES_ALL)
+    private val item = Regex("<item\\b[^>]*>(.*?)</item>", RegexOption.DOT_MATCHES_ALL)
+    private fun tag(name: String) = Regex("<$name\\b[^>]*>(.*?)</$name>", RegexOption.DOT_MATCHES_ALL)
+    private val zoned = java.time.format.DateTimeFormatter.ofPattern("EEE, d MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
     private val titleRe = tag("title")
     private val linkRe = tag("link")
     private val dateRe = tag("pubDate")
@@ -198,7 +250,7 @@ object Rss {
             val date = dateRe.find(body)?.groupValues?.get(1)?.trim()?.let {
                 runCatching {
                     java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toEpochSecond()
-                }.getOrNull()
+                }.recoverCatching { _ -> java.time.ZonedDateTime.parse(it, zoned).toEpochSecond() }.getOrNull()
             }
             Headline(symbol, title, date, linkRe.find(body)?.groupValues?.get(1)?.let(::clean), source)
         }.toList()

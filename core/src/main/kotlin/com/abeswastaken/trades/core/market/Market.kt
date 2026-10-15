@@ -32,6 +32,8 @@ data class Headline(
     val publishedEpochSec: Long?,
     val url: String?,
     val source: String = "",
+    /** -1 (bearish) to +1 (bullish), from sources that score stories. */
+    val sentiment: Double? = null,
 )
 
 interface MarketData {
@@ -40,6 +42,19 @@ interface MarketData {
     /** Calls on [symbol] expiring between [minDte] and [maxDte] days from [today]. */
     suspend fun calls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): List<OptionQuote>
     suspend fun news(symbol: String, limit: Int = 8): List<Headline>
+}
+
+/** Every listed expiry, plus the calls for the first expiry inside the window asked for. */
+data class ChainSnapshot(val expirations: List<LocalDate>, val calls: List<OptionQuote>)
+
+/** Market-wide lists for finding names that aren't on the watchlist yet (Yahoo only). */
+interface Discovery {
+    /** US equities in a price band with enough volume, most traded first. */
+    suspend fun screen(minPrice: Double, maxPrice: Double, minAvgVolume: Long, size: Int): List<Quote>
+    /** Yahoo's saved screens: day_gainers, day_losers, most_actives, ... */
+    suspend fun predefined(list: String, size: Int): List<Quote>
+    suspend fun trending(size: Int): List<String>
+    suspend fun nearestCalls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): ChainSnapshot
 }
 
 class MarketDataException(message: String, cause: Throwable? = null) : Exception(message, cause)
