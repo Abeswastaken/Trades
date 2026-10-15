@@ -70,10 +70,6 @@ fun TradesApp(vm: AppViewModel) {
             }
         }
     }
-    val openLog by vm.openLogRequest.collectAsState()
-    LaunchedEffect(openLog) {
-        if (openLog) { vm.openLogRequest.value = false; nav.navigate("log") }
-    }
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
 

@@ -74,7 +74,8 @@ class AppFlowTest {
         rule.onNodeWithTag("tab_positions").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("cc_ZZQX").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("cc_ZZQX").performScrollTo().performClick()
-        rule.waitUntil(30_000) { rule.onAllNodesWithTag("field_strike").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(20_000) { rule.onAllNodesWithText("Covered call on", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(25_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("field_qty").assertTextContains("1")
         rule.onNodeWithTag("field_strike").performTextClearance()
         rule.onNodeWithTag("field_strike").performTextInput("11")

@@ -201,7 +201,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val openTab = MutableStateFlow<String?>(null)
 
     /** Set when Log Fill should open; the app navigates and clears it (safe across rotation). */
-    val openLogRequest = MutableStateFlow(false)
 
     /** An option Positions should open the action sheet for (from a Home alert). */
     val focusPosition = MutableStateFlow<com.abeswastaken.trades.core.model.Instrument?>(null)
@@ -217,7 +216,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             "Covered call on $contracts x 100 $t. Looking up a strike in today's chain…",
         )
         draft = start
-        openLogRequest.value = true
         suggesting.value = t
         viewModelScope.launch {
             val (q, o) = try {

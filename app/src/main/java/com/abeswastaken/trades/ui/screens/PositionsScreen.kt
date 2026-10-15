@@ -108,7 +108,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
                 val coverable = ledger.coverableContracts(p.instrument.ticker)
                 StockRow(
                     p, quotes[p.instrument.ticker], coverable, busy = suggesting == p.instrument.ticker,
-                    onCoveredCall = { vm.coveredCallDraft(p, coverable) },
+                    onCoveredCall = { vm.coveredCallDraft(p, coverable); openLog() },
                     onSell = { vm.startDraft(FillDraft.close(p, quotes[p.instrument.ticker]?.price)); openLog() },
                 )
             }
