@@ -5,7 +5,9 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.abeswastaken.trades.core.engine.ClaudeModel
+import com.abeswastaken.trades.core.market.NewsSourceId
 import com.abeswastaken.trades.core.scanner.ScanRules
+import com.abeswastaken.trades.core.scanner.ScreenerRules
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.security.KeyStore
@@ -21,7 +23,18 @@ data class AppSettings(
     val hasApiKey: Boolean = false,
     val finnhubKey: String = "",
     val rules: ScanRules = ScanRules(),
-)
+    val newsSources: Set<NewsSourceId> = NewsSourceId.defaults,
+    val alphaVantageKey: String = "",
+    val marketauxKey: String = "",
+    val screener: ScreenerRules = ScreenerRules(),
+) {
+    /** Keys for the news sources that need one (Finnhub's doubles as the quote backup). */
+    val newsKeys: Map<NewsSourceId, String> get() = mapOf(
+        NewsSourceId.FINNHUB to finnhubKey,
+        NewsSourceId.ALPHA_VANTAGE to alphaVantageKey,
+        NewsSourceId.MARKETAUX to marketauxKey,
+    )
+}
 
 /** Plain settings in SharedPreferences; the Anthropic key is encrypted with an Android Keystore key. */
 class SettingsStore(context: Context) {
@@ -31,6 +44,7 @@ class SettingsStore(context: Context) {
 
     private fun read(): AppSettings {
         val d = ScanRules()
+        val sd = ScreenerRules()
         return AppSettings(
             startingCash = prefs.getFloat("startingCash", 0f).toDouble(),
             defaultModel = ClaudeModel.byName(prefs.getString("defaultModel", null)),
@@ -48,6 +62,17 @@ class SettingsStore(context: Context) {
                 minBid = prefs.getFloat("minBid", d.minBid.toFloat()).toDouble(),
                 minPremiumPercent = prefs.getFloat("minPremiumPercent", d.minPremiumPercent.toFloat()).toDouble(),
                 maxCandidates = prefs.getInt("maxCandidates", d.maxCandidates),
+            ),
+            newsSources = prefs.getStringSet("newsSources", null)?.let { NewsSourceId.parse(it) } ?: NewsSourceId.defaults,
+            alphaVantageKey = prefs.getString("alphaVantageKey", "") ?: "",
+            marketauxKey = prefs.getString("marketauxKey", "") ?: "",
+            screener = ScreenerRules(
+                minPrice = prefs.getFloat("scrMinPrice", sd.minPrice.toFloat()).toDouble(),
+                maxPrice = prefs.getFloat("scrMaxPrice", sd.maxPrice.toFloat()).toDouble(),
+                minAvgVolume = prefs.getLong("scrMinAvgVolume", sd.minAvgVolume),
+                weekliesOnly = prefs.getBoolean("scrWeekliesOnly", sd.weekliesOnly),
+                maxDte = prefs.getInt("scrMaxDte", sd.maxDte),
+                minOtmPercent = prefs.getFloat("scrMinOtm", sd.minOtmPercent.toFloat()).toDouble(),
             ),
         )
     }
@@ -69,6 +94,15 @@ class SettingsStore(context: Context) {
             .putFloat("minBid", s.rules.minBid.toFloat())
             .putFloat("minPremiumPercent", s.rules.minPremiumPercent.toFloat())
             .putInt("maxCandidates", s.rules.maxCandidates)
+            .putStringSet("newsSources", s.newsSources.map { it.name }.toSet())
+            .putString("alphaVantageKey", s.alphaVantageKey.trim())
+            .putString("marketauxKey", s.marketauxKey.trim())
+            .putFloat("scrMinPrice", s.screener.minPrice.toFloat())
+            .putFloat("scrMaxPrice", s.screener.maxPrice.toFloat())
+            .putLong("scrMinAvgVolume", s.screener.minAvgVolume)
+            .putBoolean("scrWeekliesOnly", s.screener.weekliesOnly)
+            .putInt("scrMaxDte", s.screener.maxDte)
+            .putFloat("scrMinOtm", s.screener.minOtmPercent.toFloat())
             .apply()
         _state.value = read()
     }

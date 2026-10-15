@@ -35,6 +35,14 @@ sealed interface RecRun {
     data class Failed(val message: String) : RecRun
 }
 
+/** State of a longer job (market scan, screener) that reports progress. */
+sealed interface Work<out T> {
+    data object Idle : Work<Nothing>
+    data class Running(val step: String) : Work<Nothing>
+    data class Done<T>(val value: T) : Work<T>
+    data class Failed(val message: String) : Work<Nothing>
+}
+
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     val repo: Repository = (app as App).repo
 
@@ -158,6 +166,67 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun testAnthropicKey() {
         keyTest.value = "Testing…"
         viewModelScope.launch { keyTest.value = repo.testAnthropicKey() }
+    }
+
+    // ---- Discovery -----------------------------------------------------------------------------
+
+    val marketNews = MutableStateFlow<List<Headline>?>(null)
+    val marketNewsLoading = MutableStateFlow(false)
+
+    fun loadMarketNews(force: Boolean = false) {
+        if (marketNewsLoading.value || (!force && marketNews.value != null)) return
+        marketNewsLoading.value = true
+        viewModelScope.launch {
+            marketNews.value = runCatching { repo.marketNews() }.getOrElse { AppLog.e("Market news failed", it); emptyList() }
+            marketNewsLoading.value = false
+        }
+    }
+
+    val scan = MutableStateFlow<Work<Repository.SavedScan>>(repo.lastScan()?.let { Work.Done(it) } ?: Work.Idle)
+
+    fun marketScan(model: ClaudeModel, focus: String) {
+        if (scan.value is Work.Running) return
+        val previous = scan.value
+        scan.value = Work.Running("Starting")
+        viewModelScope.launch {
+            scan.value = try {
+                Work.Done(repo.marketScan(model, focus.ifBlank { null }) { scan.value = Work.Running(it) })
+            } catch (e: Exception) {
+                AppLog.e("Market scan failed", e)
+                toast.value = "Market scan failed: ${e.message}"
+                if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    val screener = MutableStateFlow<Work<com.abeswastaken.trades.core.scanner.ScreenerResult>>(Work.Idle)
+
+    fun runScreener() {
+        if (screener.value is Work.Running) return
+        screener.value = Work.Running("Starting")
+        viewModelScope.launch {
+            screener.value = try {
+                Work.Done(repo.screen { screener.value = Work.Running(it) })
+            } catch (e: Exception) {
+                AppLog.e("Screener failed", e)
+                Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    /** Adds the ticker to the watchlist and asks for a recommendation focused on it. */
+    fun askAbout(ticker: String, note: String, onDone: (Long) -> Unit) {
+        viewModelScope.launch {
+            repo.addWatch(ticker)
+            recommend(settings.value.defaultModel, note, onDone)
+        }
+    }
+
+    val newsTest = MutableStateFlow<Map<com.abeswastaken.trades.core.market.NewsSourceId, String>>(emptyMap())
+
+    fun testNewsSource(id: com.abeswastaken.trades.core.market.NewsSourceId, key: String) {
+        newsTest.value = newsTest.value + (id to "Testing…")
+        viewModelScope.launch { newsTest.value = newsTest.value + (id to repo.testNewsSource(id, key)) }
     }
 
     val finnhubTest = MutableStateFlow<String?>(null)

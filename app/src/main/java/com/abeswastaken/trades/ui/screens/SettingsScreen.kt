@@ -36,11 +36,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.abeswastaken.trades.core.engine.ClaudeModel
+import com.abeswastaken.trades.core.market.NewsSourceId
 import com.abeswastaken.trades.ui.AppViewModel
 import com.abeswastaken.trades.util.AppLog
 import kotlinx.coroutines.Dispatchers
@@ -136,7 +138,7 @@ fun SettingsScreen(vm: AppViewModel) {
 
             SectionTitle("Market data")
             InfoCard {
-                Muted("Quotes, option chains and headlines come from Yahoo Finance (no key). Add a free Finnhub key as a backup for quotes and news when Yahoo is down.")
+                Muted("Quotes and option chains come from Yahoo Finance (no key). A free Finnhub key adds a backup for quotes and turns on Finnhub news.")
                 OutlinedTextField(
                     finnhub, { finnhub = it.trim() }, label = { Text("Finnhub API key (optional)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -150,6 +152,9 @@ fun SettingsScreen(vm: AppViewModel) {
                 LinkRow("Finnhub dashboard (your key)", "https://finnhub.io/dashboard") { links.openUri(it) }
                 Muted("Optional. Free tier: 60 calls a minute, enough for this app.")
             }
+
+            SectionTitle("News sources")
+            NewsSourcesCard(vm)
 
             SectionTitle("Covered-call scanner")
             ScannerRules(vm)
@@ -258,6 +263,63 @@ private fun ScannerRules(vm: AppViewModel) {
             }) { Text("Save rules") }
             OutlinedButton(onClick = { vm.updateSettings { copy(rules = com.abeswastaken.trades.core.scanner.ScanRules()) } }) { Text("Defaults") }
         }
+    }
+}
+
+@Composable
+private fun NewsSourcesCard(vm: AppViewModel) {
+    val s by vm.settings.collectAsState()
+    val tests by vm.newsTest.collectAsState()
+    val links = LocalUriHandler.current
+    var av by remember(s.alphaVantageKey) { mutableStateOf(s.alphaVantageKey) }
+    var mx by remember(s.marketauxKey) { mutableStateOf(s.marketauxKey) }
+
+    InfoCard {
+        Muted(
+            "Headlines from every source that's on are merged, de-duplicated and given to Claude, both per ticker " +
+                "and for the market scan. Keyless sources work right away; the others need a free key."
+        )
+        NewsSourceId.entries.forEach { id ->
+            val key = s.newsKeys[id].orEmpty()
+            val usable = !id.needsKey || key.isNotBlank()
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(id.label)
+                    Muted(id.note)
+                }
+                Switch(
+                    checked = id in s.newsSources && usable, enabled = usable,
+                    onCheckedChange = { on -> vm.updateSettings { copy(newsSources = if (on) newsSources + id else newsSources - id) } },
+                    modifier = Modifier.testTag("news_${id.name}"),
+                )
+            }
+            when (id) {
+                NewsSourceId.FINNHUB -> if (key.isBlank()) Muted("Uses the Finnhub key under Market data.")
+                NewsSourceId.ALPHA_VANTAGE -> KeyField("Alpha Vantage API key", av, { av = it }) {
+                    vm.updateSettings { copy(alphaVantageKey = av, newsSources = if (av.isNotBlank()) newsSources + id else newsSources) }
+                    vm.toast.value = "Saved"
+                }
+                NewsSourceId.MARKETAUX -> KeyField("Marketaux API token", mx, { mx = it }) {
+                    vm.updateSettings { copy(marketauxKey = mx, newsSources = if (mx.isNotBlank()) newsSources + id else newsSources) }
+                    vm.toast.value = "Saved"
+                }
+                else -> {}
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (usable) TextButton(onClick = { vm.testNewsSource(id, key) }) { Text("Test") }
+                LinkRow(if (id.needsKey) "Get a free key" else "Open site", id.url) { links.openUri(it) }
+            }
+            tests[id]?.let { Muted(it) }
+        }
+    }
+}
+
+@Composable
+private fun KeyField(label: String, value: String, onChange: (String) -> Unit, onSave: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(value, { onChange(it.trim()) }, label = { Text(label) }, singleLine = true, modifier = Modifier.weight(1f))
+        Button(onClick = onSave) { Text("Save") }
     }
 }
 

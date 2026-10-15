@@ -18,7 +18,7 @@ class App : Application() {
             AppLog.e("Crash on ${t.name}", e)
             previous?.uncaughtException(t, e)
         }
-        repo = Repository(TradesDb.create(this), SettingsStore(this))
+        repo = Repository(TradesDb.create(this), SettingsStore(this), filesDir)
         AppLog.i("App started, version ${packageManager.getPackageInfo(packageName, 0).versionName}")
     }
 }
