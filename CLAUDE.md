@@ -4,12 +4,14 @@ Personal trade decision-support app for Jake. Read `README.md` for features. The
 
 ## Hard lines (don't suggest otherwise, even if asked)
 - No auto-executor. The app never places orders.
-- No broker API integration. The ledger is entered by hand.
+- No broker API integration. The ledger is entered by hand or imported from a Schwab CSV export (`core/.../export/SchwabImport.kt`). Jake asked about the Schwab API on 2026-10-15 and chose CSV; revisit only if he gets an approved Schwab developer app.
 - No in-app scoreboard. The comparison lives outside the app (two Schwab balances).
 
 ## Design rules
 - **The ledger is the spine.** `core/.../ledger/Ledger.kt` replays all fills (FIFO) into lots, closed lots, cash and positions. Never regress it; run `./gradlew -p core test` before any ledger change.
 - **Pre-filter in plain code, then Claude ranks.** The scanner rejects by price/volume/DTE/OI/premium before any tokens are spent. The market scan does the same: `MarketCandidates` filters Yahoo's lists, and Claude may only pick from them (other tickers are dropped). The covered-call screener uses no Claude at all.
+- Reddit: `ApeWisdom` gives mention counts; `BuzzScreen` (core/engine/Buzz.kt) cross-checks them against quotes, volume and non-Reddit news in plain code and flags long shots. Claude (`BuzzVerifier`) is opt-in. Reddit headlines carry "Reddit" in their source and are labelled unverified in prompts.
+- `RiskLevel` (Settings) is appended to the recommendation and market-scan requests, not the cached system prompt.
 - News goes through `NewsHub` (core/market/News.kt): one provider per source, toggled in Settings; keyed ones are skipped without a key. Add a source there, not in `MarketData`.
 - **Sonnet by default** for recommendations; Haiku pre-digests news; Opus is per-call opt-in. Model IDs and prices live in `core/.../engine/Models.kt`.
 - **Mark-as-taken loop:** recommendation leads to a prefilled Log Fill, and the saved fill carries `recommendationId`. Outcomes feed later prompts. Keep this working.
@@ -28,4 +30,6 @@ Terse and direct. Has accepted that LLM picks are "educated friend", not edge; d
 - Option marks cover calls only (Yahoo chain call); puts show premium and DTE.
 - Wash sale is a flag plus disallowed amount, not a basis-adjustment engine.
 - Yahoo endpoints are unofficial (quote, options, screener, saved lists, trending); Finnhub only backs up quotes, not chains. CI's "Live check" step prints what every real feed returns, without failing the build.
-- Parked: push alerts, "Brief me on X", Schwab CSV import, widget.
+- Room is still at version 1. Before any entity change, commit `app/schemas/` (CI prints it in the "Print the Room schema" step) and add a Migration with a test.
+- Dividends and transfers aren't in the ledger's cash.
+- Parked: push alerts, "Brief me on X", widget.

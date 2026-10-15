@@ -73,7 +73,7 @@ class AppFlowTest {
 
         rule.onNodeWithTag("tab_positions").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("cc_ZZQX").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("cc_ZZQX").performClick()
+        rule.onNodeWithTag("cc_ZZQX").performScrollTo().performClick()
         rule.waitUntil(30_000) { rule.onAllNodesWithTag("field_strike").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("field_qty").assertTextContains("1")
         rule.onNodeWithTag("field_strike").performTextClearance()

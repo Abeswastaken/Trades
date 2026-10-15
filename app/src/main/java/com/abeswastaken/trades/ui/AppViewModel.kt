@@ -194,7 +194,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val t = p.instrument.ticker
         suggesting.value = t
         viewModelScope.launch {
-            val (q, o) = runCatching { repo.suggestCall(t, p.avgCost) }.getOrDefault(null to null)
+            // Never keep him waiting on Yahoo: after a few seconds, open the form without a suggestion.
+            val (q, o) = runCatching { kotlinx.coroutines.withTimeoutOrNull(8_000) { repo.suggestCall(t, p.avgCost) } }.getOrNull() ?: (null to null)
             val expiry = o?.expiry ?: com.abeswastaken.trades.core.scanner.CoveredCallScreener.nextFriday(LocalDate.now())
             val context = when {
                 o == null -> "Covered call on $contracts x 100 $t. No chain right now: enter the strike and premium from Schwab."
