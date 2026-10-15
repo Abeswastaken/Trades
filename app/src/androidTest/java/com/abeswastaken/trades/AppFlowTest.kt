@@ -26,8 +26,10 @@ import org.junit.runner.RunWith
 class AppFlowTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
-    private fun waitForText(text: String) = rule.waitUntil(10_000) {
-        rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    private fun waitForText(text: String) = try {
+        rule.waitUntil(10_000) { rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty() }
+    } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+        throw AssertionError("No text \"$text\" on screen after 10s", e)
     }
 
     @Test fun everyTabOpens() {
@@ -94,7 +96,7 @@ class AppFlowTest {
         rule.onNodeWithTag("option_expire").performClick()
         rule.onNodeWithText("Confirm").performClick()
         rule.onNodeWithTag("tab_ledger").performClick()
-        waitForText("Expired")
+        waitForText("(expired)")
 
         // Tap a fill to edit it.
         rule.onAllNodesWithText("Buy 100 ZZQX").onFirst().performClick()
