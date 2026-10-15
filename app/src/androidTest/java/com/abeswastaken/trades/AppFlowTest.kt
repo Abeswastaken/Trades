@@ -3,6 +3,7 @@ package com.abeswastaken.trades
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.assertIsEnabled
@@ -27,11 +28,21 @@ import org.junit.runner.RunWith
 class AppFlowTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
-    private fun waitForText(text: String) = try {
-        rule.waitUntil(10_000) { rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty() }
+    /** Waits for [ok], and names what it was waiting for if it times out. */
+    private fun waitFor(what: String, ms: Long = 10_000, ok: () -> Boolean) = try {
+        rule.waitUntil(ms, ok)
     } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
-        throw AssertionError("No text \"$text\" on screen after 10s", e)
+        throw AssertionError("Timed out after ${ms / 1000}s waiting for: $what", e)
     }
+
+    private fun waitForText(text: String) = waitFor("text \"$text\"") {
+        rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    private fun hasTag(tag: String) = rule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** Clicks through the semantics action, so a layout shift mid-tap (quotes, a lookup landing) can't swallow it. */
+    private fun SemanticsNodeInteraction.tap() = performSemanticsAction(SemanticsActions.OnClick)
 
     @Test fun everyTabOpens() {
         rule.onNodeWithText("Colvin Trades").assertExists()
@@ -79,33 +90,37 @@ class AppFlowTest {
         waitForText("Buy 100 ZZQX")
 
         rule.onNodeWithTag("tab_positions").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("cc_ZZQX").fetchSemanticsNodes().isNotEmpty() }
-        // Quotes refresh as Positions opens and shift the list, which can swallow a touch; invoke the button's click directly.
-        rule.onNodeWithTag("cc_ZZQX").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
-        rule.waitUntil(25_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        waitFor("covered-call button") { hasTag("cc_ZZQX") }
+        rule.onNodeWithTag("cc_ZZQX").performScrollTo().tap()
+        waitFor("Log Fill with a strike field", 25_000) { hasTag("field_strike") }
+        // Let the chain lookup land (it rewrites the context line) before typing over it.
+        waitFor("chain lookup to finish", 25_000) {
+            rule.onAllNodesWithText("Looking up a strike", substring = true).fetchSemanticsNodes().isEmpty()
+        }
         rule.onNodeWithTag("field_qty").assertTextContains("1")
         rule.onNodeWithTag("field_strike").performTextClearance()
         rule.onNodeWithTag("field_strike").performTextInput("11")
         rule.onNodeWithTag("field_price").performTextClearance()
         rule.onNodeWithTag("field_price").performTextInput("0.20")
-        rule.onNodeWithTag("save_fill").performScrollTo().performClick()
+        rule.onNodeWithTag("save_fill").performScrollTo().assertIsEnabled().tap()
 
         // Saved: the form closes. Then scroll the positions list down to the option and tap it.
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+        waitFor("covered call to save and the form to close") { !hasTag("field_strike") }
         rule.onNodeWithTag("positions_list").performScrollToNode(hasText("11C", substring = true))
-        rule.onAllNodes(hasText("11C", substring = true) and hasClickAction()).onFirst().performSemanticsAction(SemanticsActions.OnClick)
-        rule.waitUntil(10_000) { rule.onAllNodesWithTag("option_expire").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("option_expire").performClick()
-        rule.onNodeWithText("Confirm").performClick()
+        rule.onAllNodes(hasText("11C", substring = true) and hasClickAction()).onFirst().tap()
+        waitFor("option action sheet") { hasTag("option_expire") }
+        rule.onNodeWithTag("option_expire").tap()
+        waitForText("Confirm")
+        rule.onNodeWithText("Confirm").tap()
         rule.onNodeWithTag("tab_ledger").performClick()
         waitForText("(expired)")
 
         // Tap a fill to edit it.
-        rule.onAllNodesWithText("Buy 100 ZZQX").onFirst().performClick()
+        rule.onAllNodes(hasText("Buy 100 ZZQX", substring = true) and hasClickAction()).onFirst().tap()
         waitForText("Edit fill")
         rule.onNodeWithTag("field_price").performTextClearance()
         rule.onNodeWithTag("field_price").performTextInput("9.5")
-        rule.onNodeWithTag("save_fill").performScrollTo().performClick()
+        rule.onNodeWithTag("save_fill").performScrollTo().tap()
         waitForText("@ 9.50")
     }
 }
