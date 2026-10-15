@@ -45,6 +45,14 @@ import com.abeswastaken.trades.core.market.NewsSourceId
 import com.abeswastaken.trades.core.market.NewsSources
 import com.abeswastaken.trades.core.scanner.CoveredCallScreener
 import com.abeswastaken.trades.core.scanner.ScreenerResult
+import com.abeswastaken.trades.core.engine.BuzzCheck
+import com.abeswastaken.trades.core.engine.BuzzReport
+import com.abeswastaken.trades.core.engine.BuzzScreen
+import com.abeswastaken.trades.core.engine.BuzzVerifier
+import com.abeswastaken.trades.core.export.ImportPreview
+import com.abeswastaken.trades.core.export.SchwabImport
+import com.abeswastaken.trades.core.market.ApeWisdom
+import com.abeswastaken.trades.core.market.RedditNews
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -84,18 +92,56 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         AppLog.i("Deleted fill $id")
     }
 
-    /** Short option position expired worthless: buy back each lot at zero. */
+    /** Replaces a logged fill in place. It keeps its id, so its order in the FIFO replay doesn't change. */
+    suspend fun updateFill(id: Long, f: Fill) {
+        val old = dao.fill(id) ?: error("That fill no longer exists")
+        val next = FillEntity.from(f.copy(id = id)).copy(createdAt = old.createdAt)
+        // Replay first so an edit that breaks the ledger (e.g. a close bigger than the position) is refused.
+        Ledger.compute(dao.allFills().map { if (it.id == id) next.toFill() else it.toFill() }, 0.0)
+        dao.updateFill(next)
+        AppLog.i("Edited fill $id: ${f.side} ${f.quantity} ${f.instrument.label} @ ${f.price}")
+    }
+
+    /** Option expired. Short lots are bought back at 0, long lots sold at 0. */
     suspend fun expire(p: Position, date: LocalDate) {
         val fills = p.lots.map { OptionEvents.expire(it, 0, date) }
         dao.insertFills(fills.map(FillEntity::from))
-        AppLog.i("Expired ${p.instrument.label}")
+        AppLog.i("Expired ${p.instrument.label} on $date")
     }
 
-    /** Short call assigned: close the calls and sell the shares at the strike. */
+    /**
+     * Short option assigned. A call closes at 0 and sells the shares at the strike; a put closes at 0 and
+     * buys them. Refuses a call assignment that would sell shares that aren't held.
+     */
     suspend fun assign(p: Position, date: LocalDate) {
-        val fills = p.lots.flatMap { OptionEvents.assignShortCall(it, abs(it.quantity), 0, date) }
+        val contracts = abs(p.quantity)
+        if (p.instrument.type == AssetType.CALL) {
+            val held = ledger().sharesHeld(p.instrument.ticker)
+            require(held + 1e-9 >= contracts * 100) {
+                "Only ${held.toLong()} ${p.instrument.ticker} shares are held, but assignment sells ${(contracts * 100).toLong()}. Log the shares first, or mark it expired."
+            }
+        }
+        val fills = p.lots.flatMap {
+            if (p.instrument.type == AssetType.CALL) OptionEvents.assignShortCall(it, abs(it.quantity), 0, date)
+            else OptionEvents.assignShortPut(it, abs(it.quantity), 0, date)
+        }
         dao.insertFills(fills.map { FillEntity.from(it.copy(id = 0)) })
-        AppLog.i("Assigned ${p.instrument.label}")
+        AppLog.i("Assigned ${p.instrument.label} on $date")
+    }
+
+    suspend fun roll(fills: List<Fill>) {
+        db.withTransaction { dao.insertFills(fills.map { FillEntity.from(it.copy(id = 0)) }) }
+        AppLog.i("Rolled ${fills.first().instrument.label} to ${fills.last().instrument.label}")
+    }
+
+    /** Today's chain for the nearest weekly, with the call to write on shares already held. */
+    suspend fun suggestCall(ticker: String, avgCost: Double): Pair<Quote?, com.abeswastaken.trades.core.market.OptionQuote?> {
+        val today = today()
+        val q = runCatching { market().quotes(listOf(ticker))[ticker] }.getOrNull()
+        val snap = runCatching { yahoo.nearestCalls(ticker, today, 4, 10) }
+            .onFailure { AppLog.i("Chain for $ticker failed: ${it.message}") }.getOrNull()
+        val pick = if (q == null || snap == null) null else CoveredCallScreener.callToWrite(q.price, avgCost, snap.calls)
+        return q to pick
     }
 
     // ---- Watchlist -----------------------------------------------------------------------------
@@ -157,12 +203,15 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         val ledger = ledger()
         val exclude = (dao.allWatch().map { it.ticker } + ledger.positions.map { it.instrument.ticker }).toSet()
         onProgress("Finding movers, most active and trending stocks")
-        val candidates = MarketCandidates.gather(yahoo, market(), s.rules, ledger.cash, exclude) { AppLog.i(it) }
+        val buzz = runCatching { buzz() }.getOrNull()?.checks.orEmpty()
+        val extra = buzz.take(15).associate { it.ticker to if (it.longShot) "reddit long shot" else "reddit buzz" }
+        val candidates = MarketCandidates.gather(yahoo, market(), s.rules, ledger.cash, exclude, extra = extra) { AppLog.i(it) }
+        val names = candidates.map { it.quote.symbol }.toSet()
         onProgress("Reading market news from ${s.newsSources.size} sources")
         val headlines = runCatching { marketNews() }.getOrDefault(emptyList())
         onProgress("Asking ${model.label} to pick from ${candidates.size} stocks")
         val result = MarketScanner(AnthropicLlm(key, onDowngrade = { AppLog.i(it) }))
-            .scan(model, MarketScanContext(today(), ledger.cash, candidates, headlines, focus))
+            .scan(model, MarketScanContext(today(), ledger.cash, candidates, headlines, focus, s.risk, buzz.filter { it.ticker in names }.map { it.promptLine() }))
         if (result.dropped.isNotEmpty()) AppLog.i("Market scan dropped picks not in the list: ${result.dropped}")
         val now = System.currentTimeMillis()
         recordSpend(now, result.spend)
@@ -208,6 +257,78 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
     } catch (e: Exception) {
         AppLog.e("Finnhub test failed", e)
         "Finnhub rejected the key: ${e.message}"
+    }
+
+    // ---- Reddit buzz ---------------------------------------------------------------------------
+
+    data class Buzz(val at: Long, val checks: List<BuzzCheck>, val source: String)
+
+    @Volatile private var buzzCache: Buzz? = null
+    private val apeWisdom = ApeWisdom(http)
+
+    fun cachedBuzz(): Buzz? = buzzCache
+
+    /**
+     * Free cross-check of Reddit chatter: ApeWisdom mention counts, then Yahoo quotes and real news on the
+     * names that are moving. Cached for 10 minutes.
+     */
+    suspend fun buzz(force: Boolean = false): Buzz {
+        buzzCache?.takeIf { !force && System.currentTimeMillis() - it.at < 10 * 60_000 }?.let { return it }
+        val items = apeWisdom.top("all-stocks").filter { MarketCandidates.looksLikeStock(it.ticker) }.take(30)
+        val quotes = runCatching { market().quotes(items.map { it.ticker }) }.getOrElse { AppLog.e("Buzz quotes failed", it); emptyMap() }
+        val now = System.currentTimeMillis() / 1000
+        // News for the names most worth checking: rising fastest, or moving most.
+        val worth = items.sortedByDescending { i ->
+            (i.mentionRatio ?: 1.0) + kotlin.math.abs(quotes[i.ticker]?.changePercent ?: 0.0) / 5
+        }.take(BUZZ_NEWS).map { it.ticker }.toSet()
+        val hub = NewsHub(NewsSources.build(http, settings.state.value.newsSources - NewsSourceId.REDDIT, settings.state.value.newsKeys)) { AppLog.i(it) }
+        val news = coroutineScope {
+            worth.map { t -> async { t to runCatching { hub.ticker(t, 4) }.getOrDefault(emptyList()) } }.awaitAll().toMap()
+        }
+        val checks = BuzzScreen.rank(items.map { BuzzScreen.check(it, quotes[it.ticker], news[it.ticker].orEmpty(), now) })
+        AppLog.i("Buzz: ${checks.size} names, long shots ${checks.filter { it.longShot }.map { it.ticker }}")
+        return Buzz(System.currentTimeMillis(), checks, "ApeWisdom").also { buzzCache = it }
+    }
+
+    data class SavedBuzzReport(val at: Long, val model: String, val costUsd: Double, val report: BuzzReport)
+
+    private val buzzFile get() = File(filesDir, "buzz_report.json")
+
+    fun lastBuzzReport(): SavedBuzzReport? = runCatching {
+        val o = JSONObject(buzzFile.readText())
+        SavedBuzzReport(o.getLong("at"), o.getString("model"), o.getDouble("costUsd"), BuzzVerifier.parse(o.getString("report")))
+    }.getOrNull()
+
+    /** Claude reads the Reddit posts next to the numbers and says what holds up. */
+    suspend fun verifyBuzz(model: ClaudeModel, onProgress: (String) -> Unit): SavedBuzzReport {
+        val key = settings.apiKey() ?: throw LlmException("Add your Anthropic API key in Settings first.")
+        onProgress("Getting Reddit mentions, quotes and news")
+        val checks = buzz().checks.take(BUZZ_VERIFY)
+        onProgress("Reading the Reddit posts")
+        val reddit = RedditNews(http)
+        val posts = coroutineScope {
+            checks.map { c -> async { c.ticker to runCatching { reddit.ticker(c.ticker, 6) }.getOrDefault(emptyList()) } }.awaitAll().toMap()
+        }
+        onProgress("Asking ${model.label} to check ${checks.size} names")
+        val (report, spend) = BuzzVerifier(AnthropicLlm(key, onDowngrade = { AppLog.i(it) })).verify(model, checks, posts, settings.state.value.risk)
+        val now = System.currentTimeMillis()
+        recordSpend(now, spend)
+        val saved = SavedBuzzReport(now, spend.last().servedModel, spend.sumOf { it.cost }, report)
+        buzzFile.writeText(
+            JSONObject().put("at", now).put("model", saved.model).put("costUsd", saved.costUsd).put("report", BuzzVerifier.encode(report)).toString()
+        )
+        AppLog.i("Reddit check via ${model.id}: ${report.notes.map { it.ticker + ":" + it.verdict }}")
+        return saved
+    }
+
+    // ---- Schwab import -------------------------------------------------------------------------
+
+    suspend fun previewImport(csv: String): ImportPreview = SchwabImport.preview(csv, dao.allFills().map { it.toFill() })
+
+    suspend fun importFills(fills: List<Fill>) {
+        // Inserted oldest first, so ids (the FIFO tie-break) follow trade order.
+        db.withTransaction { dao.insertFills(fills.sortedBy { it.date }.map { FillEntity.from(it.copy(id = 0)) }) }
+        AppLog.i("Imported ${fills.size} fills from Schwab")
     }
 
     // ---- Recommendations -----------------------------------------------------------------------
@@ -271,7 +392,8 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         val ctx = RecContext(
             today = today, ledger = ledger, startingCash = s.startingCash, quotes = quotes,
             candidates = scan.candidates, newsDigest = null, history = history, focus = focus,
-            watchlist = watch, optionMarks = marks,
+            watchlist = watch, optionMarks = marks, risk = s.risk,
+            buzz = cachedBuzz()?.checks.orEmpty().filter { it.ticker in universe }.map { it.promptLine() },
         )
         onProgress(if (s.useNewsDigest) "Asking Claude (news digest, then ${model.label})" else "Asking ${model.label}")
         val result = Recommender(AnthropicLlm(key, onDowngrade = { AppLog.i(it) })).recommend(model, ctx, headlines, s.useNewsDigest)
@@ -298,7 +420,8 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         root.put("version", 1)
         root.put("exportedAt", Instant.now().toString())
         val s = settings.state.value
-        root.put("settings", JSONObject().put("startingCash", s.startingCash).put("defaultModel", s.defaultModel.name))
+        root.put("settings", JSONObject().put("startingCash", s.startingCash).put("defaultModel", s.defaultModel.name)
+            .put("risk", s.risk.name).put("newsSources", JSONArray(s.newsSources.map { it.name })))
         root.put("fills", JSONArray(dao.allFills().map { f ->
             JSONObject().put("id", f.id).put("epochDay", f.epochDay).put("ticker", f.ticker).put("type", f.type)
                 .put("strike", f.strike ?: JSONObject.NULL).put("expiryEpochDay", f.expiryEpochDay ?: JSONObject.NULL)
@@ -322,6 +445,9 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
     suspend fun importJson(text: String) {
         val root = JSONObject(text)
         require(root.optInt("version") == 1) { "Not a Colvin Trades backup" }
+        // Keep what's there now, so a wrong file can be undone by restoring this one.
+        runCatching { File(filesDir, "pre-restore-${System.currentTimeMillis()}.json").writeText(exportJson()) }
+            .onFailure { AppLog.e("Pre-restore snapshot failed", it) }
         fun JSONObject.optLongOrNull(k: String) = if (isNull(k) || !has(k)) null else getLong(k)
         fun JSONObject.optDoubleOrNull(k: String) = if (isNull(k) || !has(k)) null else getDouble(k)
         fun JSONObject.optStringOrNull(k: String) = if (isNull(k) || !has(k)) null else getString(k)
@@ -365,6 +491,8 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
                 copy(
                     startingCash = st.optDouble("startingCash", startingCash),
                     defaultModel = ClaudeModel.byName(st.optString("defaultModel", defaultModel.name)),
+                    risk = com.abeswastaken.trades.core.engine.RiskLevel.byName(st.optString("risk", risk.name)),
+                    newsSources = st.optJSONArray("newsSources")?.let { a -> NewsSourceId.parse((0 until a.length()).map(a::getString)) } ?: newsSources,
                 )
             }
         }
@@ -373,6 +501,8 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
 
     companion object {
         private const val MAX_NEWS_TICKERS = 8
+        private const val BUZZ_NEWS = 8
+        private const val BUZZ_VERIFY = 10
 
         /** Turns a recommendation into a prefilled fill for the Log Fill screen. */
         fun draftFrom(recId: Long, r: Recommendation): FillDraft {
@@ -409,7 +539,38 @@ data class FillDraft(
     val note: String = "",
     val recommendationId: Long? = null,
     val recommendationSummary: String? = null,
+    /** Set when editing an existing fill instead of logging a new one. */
+    val editId: Long? = null,
+    /** A line shown at the top of the form saying where the prefill came from. */
+    val context: String? = null,
 ) {
+    companion object {
+        private fun num(v: Double) = if (v == Math.floor(v)) v.toLong().toString() else v.toString()
+
+        fun edit(f: Fill) = FillDraft(
+            ticker = f.instrument.ticker, type = f.instrument.type, side = f.side, quantity = num(f.quantity),
+            price = num(f.price), fees = if (f.fees > 0) num(f.fees) else "", date = f.date.toString(),
+            strike = f.instrument.strike?.let(::num).orEmpty(), expiry = f.instrument.expiry?.toString().orEmpty(),
+            note = f.note, recommendationId = f.recommendationId, editId = f.id,
+        )
+
+        /** Closes an open position: the opposite side, same contract, same size. */
+        fun close(p: Position, price: Double? = null) = FillDraft(
+            ticker = p.instrument.ticker, type = p.instrument.type,
+            side = if (p.quantity < 0) Side.BUY else Side.SELL,
+            quantity = num(abs(p.quantity)), price = price?.let { "%.2f".format(java.util.Locale.US, it) }.orEmpty(),
+            strike = p.instrument.strike?.let(::num).orEmpty(), expiry = p.instrument.expiry?.toString().orEmpty(),
+            note = "Close", context = "Closing ${p.instrument.label}",
+        )
+
+        /** Writes calls against shares already held, one contract per 100 uncovered shares. */
+        fun coveredCall(ticker: String, contracts: Int, expiry: LocalDate, strike: Double?, premium: Double?, context: String) = FillDraft(
+            ticker = ticker, type = AssetType.CALL, side = Side.SELL, quantity = contracts.toString(),
+            price = premium?.let { "%.2f".format(java.util.Locale.US, it) }.orEmpty(),
+            strike = strike?.let(::num).orEmpty(), expiry = expiry.toString(), note = "Covered call", context = context,
+        )
+    }
+
     /** Returns the fill, or an error message for the first bad field. */
     fun toFill(): Result<Fill> = runCatching {
         val t = ticker.trim().uppercase()
@@ -423,6 +584,6 @@ data class FillDraft(
             val e = runCatching { LocalDate.parse(expiry.trim()) }.getOrElse { error("Expiry must be YYYY-MM-DD") }
             Instrument(t, type, k, e)
         }
-        Fill(0, d, inst, side, qty, px, fee, note.trim(), recommendationId)
+        Fill(editId ?: 0, d, inst, side, qty, px, fee, note.trim(), recommendationId)
     }
 }

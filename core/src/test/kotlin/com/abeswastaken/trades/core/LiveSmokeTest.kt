@@ -60,6 +60,24 @@ class LiveSmokeTest {
             report("news ${p.id.label} ticker") { p.ticker("AAPL", 3).joinToString(" | ") { "${it.title} @${it.publishedEpochSec}" } }
             report("news ${p.id.label} market") { p.market(3).joinToString(" | ") { "${it.title} @${it.publishedEpochSec}" } }
         }
+        val ape = com.abeswastaken.trades.core.market.ApeWisdom(http)
+        report("apewisdom all-stocks") {
+            ape.top("all-stocks").take(10).joinToString { "${it.ticker}#${it.rank}(${it.mentions}/${it.mentions24hAgo})" }
+        }
+        report("apewisdom wallstreetbets") { ape.top("wallstreetbets").take(8).joinToString { "${it.ticker}#${it.rank}" } }
+        report("reddit buzz check") {
+            val items = ape.top("all-stocks").take(20)
+            val q = yahoo.quotes(items.map { it.ticker })
+            com.abeswastaken.trades.core.engine.BuzzScreen.rank(items.map {
+                com.abeswastaken.trades.core.engine.BuzzScreen.check(it, q[it.ticker], emptyList(), System.currentTimeMillis() / 1000)
+            }).take(8).joinToString { "${it.ticker} ${it.verdict}${if (it.longShot) " LONGSHOT" else ""} vol=${it.quote?.volumeRatio?.let { v -> "%.1f".format(v) }}" }
+        }
+        for (b in listOf("https://www.reddit.com", "https://old.reddit.com")) {
+            report("reddit rss $b") {
+                com.abeswastaken.trades.core.market.RedditNews(http, listOf(b)).market(3).joinToString(" | ") { "${it.title.take(60)} [${it.source}]" }
+            }
+        }
+        report("market clock") { com.abeswastaken.trades.core.market.MarketClock.session(java.time.ZonedDateTime.now()).toString() }
         report("news Alpha Vantage demo") { AlphaVantageNews(http, "demo").ticker("AAPL", 3).joinToString(" | ") { "${it.title} ${it.sentiment}" } }
     }
 }

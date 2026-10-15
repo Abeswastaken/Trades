@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.abeswastaken.trades.core.engine.ClaudeModel
+import com.abeswastaken.trades.core.engine.RiskLevel
 import com.abeswastaken.trades.core.market.NewsSourceId
 import com.abeswastaken.trades.core.scanner.ScanRules
 import com.abeswastaken.trades.core.scanner.ScreenerRules
@@ -27,6 +28,7 @@ data class AppSettings(
     val alphaVantageKey: String = "",
     val marketauxKey: String = "",
     val screener: ScreenerRules = ScreenerRules(),
+    val risk: RiskLevel = RiskLevel.NORMAL,
 ) {
     /** Keys for the news sources that need one (Finnhub's doubles as the quote backup). */
     val newsKeys: Map<NewsSourceId, String> get() = mapOf(
@@ -46,7 +48,9 @@ class SettingsStore(context: Context) {
         val d = ScanRules()
         val sd = ScreenerRules()
         return AppSettings(
-            startingCash = prefs.getFloat("startingCash", 0f).toDouble(),
+            // Stored as text so cents survive; older installs kept a float.
+            startingCash = prefs.getString("startingCashText", null)?.toDoubleOrNull()
+                ?: Math.round(prefs.getFloat("startingCash", 0f) * 100.0) / 100.0,
             defaultModel = ClaudeModel.byName(prefs.getString("defaultModel", null)),
             useNewsDigest = prefs.getBoolean("useNewsDigest", true),
             hasApiKey = prefs.contains("apiKey"),
@@ -74,13 +78,15 @@ class SettingsStore(context: Context) {
                 maxDte = prefs.getInt("scrMaxDte", sd.maxDte),
                 minOtmPercent = prefs.getFloat("scrMinOtm", sd.minOtmPercent.toFloat()).toDouble(),
             ),
+            risk = RiskLevel.byName(prefs.getString("risk", null)),
         )
     }
 
     fun update(block: AppSettings.() -> AppSettings) {
         val s = _state.value.block()
         prefs.edit()
-            .putFloat("startingCash", s.startingCash.toFloat())
+            .putString("startingCashText", s.startingCash.toBigDecimal().toPlainString())
+            .putString("risk", s.risk.name)
             .putString("defaultModel", s.defaultModel.name)
             .putBoolean("useNewsDigest", s.useNewsDigest)
             .putString("finnhubKey", s.finnhubKey.trim())

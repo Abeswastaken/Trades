@@ -107,6 +107,12 @@ interface TradesDao {
     @Query("DELETE FROM fills WHERE id = :id")
     suspend fun deleteFill(id: Long)
 
+    @Query("SELECT * FROM fills WHERE id = :id")
+    suspend fun fill(id: Long): FillEntity?
+
+    @androidx.room.Update
+    suspend fun updateFill(f: FillEntity)
+
     @Query("SELECT * FROM recommendations ORDER BY createdAt DESC")
     fun recs(): Flow<List<RecEntity>>
 

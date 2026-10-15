@@ -28,6 +28,9 @@ data class RecContext(
     val focus: String?,
     val watchlist: List<String>,
     val optionMarks: Map<com.abeswastaken.trades.core.model.Instrument, com.abeswastaken.trades.core.market.OptionMark> = emptyMap(),
+    val risk: RiskLevel = RiskLevel.NORMAL,
+    /** Reddit chatter on held and watched names, already cross-checked in plain code. */
+    val buzz: List<String> = emptyList(),
 )
 
 object Prompts {
@@ -90,7 +93,7 @@ object Prompts {
                 appendLine(
                     "- ${inst.ticker}: ${num(p.quantity)} shares, avg cost ${px(p.avgCost)}" +
                         (mark?.let { ", last ${px(it)}, unrealized ${money(unreal!!)}" } ?: ", no quote") +
-                        (q?.nextEarnings?.let { ", next earnings $it" } ?: "") +
+                        (q?.nextEarnings?.takeIf { !it.isBefore(c.today) }?.let { ", next earnings $it" } ?: "") +
                         ", calls still writable: ${l.coverableContracts(inst.ticker)}"
                 )
             } else {
@@ -98,7 +101,7 @@ object Prompts {
                 val side = if (p.quantity < 0) "short" else "long"
                 appendLine(
                     "- ${inst.label}: $side ${num(kotlin.math.abs(p.quantity))} contracts at ${px(p.avgCost)}" +
-                        (dte?.let { ", $it days to expiry" } ?: "") +
+                        (dte?.let { if (it < 0) ", PAST EXPIRY by ${-it} days and not yet marked expired or assigned (ask the owner to resolve it)" else ", $it days to expiry" } ?: "") +
                         (c.quotes[inst.ticker]?.let { ", stock last ${px(it.price)}" } ?: "") +
                         (c.optionMarks[inst]?.let { m ->
                             ", now bid ${px(m.quote.bid)} ask ${px(m.quote.ask)}" +
@@ -118,7 +121,7 @@ object Prompts {
                 "- $sym: ${px(q.price)}" +
                     (q.changePercent?.let { " (${pct(it)} today)" } ?: "") +
                     (q.avgVolume?.let { ", avg vol ${it}" } ?: "") +
-                    (q.nextEarnings?.let { ", earnings $it" } ?: "")
+                    (q.nextEarnings?.takeIf { !it.isBefore(c.today) }?.let { ", earnings $it" } ?: "")
             )
         }
         appendLine()
@@ -131,12 +134,20 @@ object Prompts {
                     (if (o.liveBid) "bid ${px(o.bid)} ask ${px(o.ask)}, " else "last ${px(o.premium)} (no live bid, market closed), ") +
                     (if (o.liveBid) "OI ${o.openInterest}, " else "") + "${k.dte} DTE, ${pct(k.otmPercent)} OTM, premium ${pct(k.premiumPercent)} " +
                     "(${pct(k.annualizedPercent)} annualized), up to ${k.contracts} contracts" +
-                    (k.quote.nextEarnings?.takeIf { !it.isAfter(o.expiry) }?.let { ", EARNINGS $it before expiry" } ?: "")
+                    (k.quote.nextEarnings?.takeIf { !it.isBefore(c.today) && !it.isAfter(o.expiry) }?.let { ", EARNINGS $it before expiry" } ?: "")
             )
         }
         appendLine()
         appendLine("## News digest")
         appendLine(c.newsDigest?.takeIf { it.isNotBlank() } ?: "Not available.")
+        appendLine()
+        if (c.buzz.isNotEmpty()) {
+            appendLine("## Reddit chatter (unverified crowd talk; weigh it only where price, volume or news back it up)")
+            c.buzz.forEach { appendLine("- $it") }
+            appendLine()
+        }
+        appendLine("## Owner's risk setting")
+        appendLine(c.risk.rules)
         appendLine()
         appendLine("## Past recommendations (newest first)")
         if (c.history.isEmpty()) appendLine("None yet.")

@@ -52,7 +52,7 @@ import com.abeswastaken.trades.ui.theme.pnlColor
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WatchlistScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by vm.watchTab.collectAsMutableInt()
     val loading by vm.quotesLoading.collectAsState()
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -61,15 +61,32 @@ fun WatchlistScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
                 if (tab == 0) IconButton(onClick = { vm.refreshQuotes() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") }
             },
         )
-        TabRow(selectedTabIndex = tab) {
-            listOf("Watchlist", "Market", "Covered calls").forEachIndexed { i, label ->
+        androidx.compose.material3.ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
+            listOf("Watchlist", "Market", "Reddit", "Covered calls").forEachIndexed { i, label ->
                 Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) }, modifier = Modifier.testTag("watch_tab_$i"))
             }
         }
         when (tab) {
             0 -> WatchTab(vm)
             1 -> MarketTab(vm, openRec)
+            2 -> RedditTab(vm)
             else -> ScreenerTab(vm, openRec)
+        }
+    }
+}
+
+/** Reads and writes an Int StateFlow as Compose state (the sub-tab lives in the ViewModel so Home can pick it). */
+@Composable
+private fun kotlinx.coroutines.flow.MutableStateFlow<Int>.collectAsMutableInt(): androidx.compose.runtime.MutableState<Int> {
+    val v by collectAsState()
+    val flow = this
+    return remember(v) {
+        object : androidx.compose.runtime.MutableState<Int> {
+            override var value: Int
+                get() = v
+                set(x) { flow.value = x }
+            override fun component1() = v
+            override fun component2(): (Int) -> Unit = { flow.value = it }
         }
     }
 }

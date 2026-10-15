@@ -37,7 +37,8 @@ enum class NewsSourceId(
     SEEKING_ALPHA("Seeking Alpha", false, "https://seekingalpha.com/page/feeds", "Per-ticker analysis and market currents. No key.", false),
     FINNHUB("Finnhub", true, "https://finnhub.io/register", "Company news and general market news. Free key, 60 calls a minute.", true),
     ALPHA_VANTAGE("Alpha Vantage", true, "https://www.alphavantage.co/support/#api-key", "News with a sentiment score per story. Free key, 25 calls a day.", true),
-    MARKETAUX("Marketaux", true, "https://www.marketaux.com/register", "Global financial news tagged by ticker, with sentiment. Free key, 100 calls a day.", true);
+    MARKETAUX("Marketaux", true, "https://www.marketaux.com/register", "Global financial news tagged by ticker, with sentiment. Free key, 100 calls a day.", true),
+    REDDIT("Reddit", false, "https://www.reddit.com/r/wallstreetbets/", "Hot posts and ticker search on r/wallstreetbets, r/stocks, r/options and r/thetagang. Crowd talk, marked unverified. No key.", true);
 
     companion object {
         val defaults: Set<NewsSourceId> get() = entries.filter { it.defaultOn }.toSet()
@@ -287,6 +288,7 @@ object NewsSources {
             NewsSourceId.FINNHUB -> FinnhubNews(client, key)
             NewsSourceId.ALPHA_VANTAGE -> AlphaVantageNews(client, key)
             NewsSourceId.MARKETAUX -> MarketauxNews(client, key)
+            NewsSourceId.REDDIT -> RedditNews(client)
         }
     }
 }

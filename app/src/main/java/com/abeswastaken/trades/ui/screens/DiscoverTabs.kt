@@ -115,7 +115,6 @@ fun MarketTab(vm: AppViewModel, openRec: (Long) -> Unit) {
                         p.ticker,
                         "Market scan pick: ${p.ticker} (${p.idea}). ${p.thesis} Check it against the numbers and " +
                             "recommend a trade on ${p.ticker} if it holds up; HOLD if not.",
-                        openRec,
                     )
                 }
             }
@@ -271,7 +270,6 @@ fun ScreenerTab(vm: AppViewModel, openRec: (Long) -> Unit) {
                         "Covered-call finder hit: buy 100 ${h.quote.symbol} near ${px(h.quote.price)} and sell the " +
                             "${o.expiry} ${px(o.strike)} call for about ${px(o.premium)} (${String.format(java.util.Locale.US, "%.1f", h.annualizedPercent)}% annualized). " +
                             "Check it and recommend it, a better strike or expiry, or HOLD.",
-                        openRec,
                     )
                 }
             }

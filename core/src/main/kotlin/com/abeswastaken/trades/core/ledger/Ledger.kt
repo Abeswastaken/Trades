@@ -151,18 +151,22 @@ object WashSale {
 
         return closed.sortedWith(compareBy({ it.closeDate }, { it.closeFillId })).map { lot ->
             if (lot.instrument.type != AssetType.STOCK || lot.wasShort || lot.realized >= 0) return@map lot
+            // Shares sold in this same sale aren't replacements: buy 100, buy 100, sell all 200 is no wash.
+            val soldHere = closed.filter { it.closeFillId == lot.closeFillId }.groupBy { it.openFillId }
+                .mapValues { (_, l) -> l.sumOf { it.quantity } }
+            fun available(b: Fill) = min(capacity[b.id] ?: 0.0, b.quantity - (soldHere[b.id] ?: 0.0))
             val window = stockBuys.filter {
                 it.instrument.ticker == lot.instrument.ticker &&
                     it.id != lot.openFillId &&
                     abs(ChronoUnit.DAYS.between(lot.closeDate, it.date)) <= 30 &&
-                    (capacity[it.id] ?: 0.0) > 0
+                    available(it) > 0
             }
             if (window.isEmpty()) return@map lot
             var need = lot.quantity
             var replaced = 0.0
             for (buy in window) {
                 if (need <= 0) break
-                val take = min(need, capacity[buy.id] ?: 0.0)
+                val take = min(need, available(buy))
                 capacity[buy.id] = (capacity[buy.id] ?: 0.0) - take
                 replaced += take
                 need -= take
@@ -189,6 +193,37 @@ object OptionEvents {
         return listOf(
             Fill(firstId, date, lot.instrument, Side.BUY, contracts, 0.0, note = "Assigned"),
             Fill(firstId + 1, date, Instrument.stock(lot.instrument.ticker), Side.SELL, contracts * 100, strike, note = "Called away"),
+        )
+    }
+
+    /** A short put assigned: close the put at 0 and buy 100 shares per contract at the strike. */
+    fun assignShortPut(lot: OpenLot, contracts: Double, firstId: Long, date: LocalDate): List<Fill> {
+        require(lot.instrument.type == AssetType.PUT && lot.isShort) { "Only short puts can be assigned here" }
+        val strike = lot.instrument.strike ?: error("Put has no strike")
+        return listOf(
+            Fill(firstId, date, lot.instrument, Side.BUY, contracts, 0.0, note = "Assigned"),
+            Fill(firstId + 1, date, Instrument.stock(lot.instrument.ticker), Side.BUY, contracts * 100, strike, note = "Put assigned"),
+        )
+    }
+
+    /**
+     * Rolls an option position: close it at [closePrice] and open the same side again at a new strike and
+     * expiry for [newPrice]. Returns the two fills; [netCredit] on the result says what the roll paid.
+     */
+    fun roll(
+        position: Position, closePrice: Double, newStrike: Double, newExpiry: LocalDate, newPrice: Double,
+        date: LocalDate, feesEach: Double = 0.0,
+    ): List<Fill> {
+        val inst = position.instrument
+        require(inst.isOption) { "Only options can be rolled" }
+        require(newPrice >= 0 && closePrice >= 0) { "Prices can't be negative" }
+        val short = position.quantity < 0
+        val qty = abs(position.quantity)
+        val next = Instrument(inst.ticker, inst.type, newStrike, newExpiry)
+        require(next != inst) { "The new option is the same as the old one" }
+        return listOf(
+            Fill(0, date, inst, if (short) Side.BUY else Side.SELL, qty, closePrice, feesEach, note = "Roll: close"),
+            Fill(0, date, next, if (short) Side.SELL else Side.BUY, qty, newPrice, feesEach, note = "Roll: open"),
         )
     }
 }

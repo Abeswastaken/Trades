@@ -113,6 +113,23 @@ fun SettingsScreen(vm: AppViewModel) {
                     }
                 }
                 Muted("Sonnet for everyday calls, Opus for the big ones. Haiku is cheapest but weakest.")
+                Spacer(Modifier.height(12.dp))
+                Text("Risk", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.abeswastaken.trades.core.engine.RiskLevel.entries.forEach { r ->
+                        FilterChip(
+                            selected = s.risk == r, onClick = { vm.updateSettings { copy(risk = r) } }, label = { Text(r.label) },
+                            modifier = Modifier.testTag("risk_${r.name}"),
+                        )
+                    }
+                }
+                Muted(
+                    when (s.risk) {
+                        com.abeswastaken.trades.core.engine.RiskLevel.LOW -> "Low: steady names, strikes further out, skips earnings and hype. Holding is fine."
+                        com.abeswastaken.trades.core.engine.RiskLevel.NORMAL -> "Normal: balances premium against assignment and drawdown. Momentum only with a catalyst."
+                        com.abeswastaken.trades.core.engine.RiskLevel.HIGH -> "High: nearer strikes, volatile and crowd-driven names are in play, and gambles are labelled as gambles."
+                    }
+                )
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text("Haiku news digest")

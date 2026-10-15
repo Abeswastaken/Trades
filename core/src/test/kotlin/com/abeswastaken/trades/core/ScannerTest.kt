@@ -96,7 +96,7 @@ class OptionMarksTest {
             override suspend fun news(symbol: String, limit: Int) = emptyList<Headline>()
         }
         val marks = com.abeswastaken.trades.core.market.OptionMarks.fetch(market, ledger.positions, today)
-        assertEquals(0 to 15, asked)
+        assertEquals(15 to 15, asked) // exactly the held expiry
         val m = marks[call]!!
         assertEquals(0.04, m.mark, 1e-9)
         assertEquals(30.0, m.unrealized, 1e-9) // (0.04 - 0.14) * -3 * 100

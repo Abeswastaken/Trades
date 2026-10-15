@@ -38,6 +38,29 @@ object Pricing {
             u.outputTokens * model.outputPerM) / 1_000_000.0
 }
 
+/** How much risk the owner wants in recommendations and scans. Set in Settings. */
+enum class RiskLevel(val label: String, val rules: String) {
+    LOW(
+        "Low",
+        "LOW. Protect capital first. Prefer covered calls further out of the money on steady, profitable names; " +
+            "skip anything with earnings before expiry, recent 10%+ moves or heavy social-media hype. HOLD is a fine answer.",
+    ),
+    NORMAL(
+        "Normal",
+        "NORMAL. Balance premium against assignment and drawdown risk. Momentum names are fine with a clear catalyst; " +
+            "avoid pure hype.",
+    ),
+    HIGH(
+        "High",
+        "HIGH. The owner accepts bigger swings for bigger premium or upside: nearer strikes, volatile and momentum names, " +
+            "catalyst plays and crowd-driven runs are in scope. Still size so one bad trade can't sink the account, and say plainly when something is a gamble.",
+    );
+
+    companion object {
+        fun byName(name: String?) = entries.firstOrNull { it.name == name } ?: NORMAL
+    }
+}
+
 enum class RecAction { BUY, SELL, SELL_CALL, BUY_TO_CLOSE, HOLD }
 
 @Serializable
