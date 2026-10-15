@@ -44,7 +44,7 @@ class AppFlowTest {
         rule.onNodeWithTag("news_REDDIT").assertExists()
         rule.onNodeWithTag("risk_HIGH").assertExists()
         rule.onNodeWithTag("tab_home").performClick(); waitForText("Needs you")
-        waitForText("Reddit buzz")
+        rule.onNodeWithTag("home_alerts").assertExists()
     }
 
     @Test fun logAFillAndSeeItEverywhere() {

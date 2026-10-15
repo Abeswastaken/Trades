@@ -95,9 +95,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return d.year == now.year && d.month == now.month
     }
 
+    private var refreshAgain = false
+    val quotesAt = MutableStateFlow<Long?>(null)
+
     fun refreshQuotes() {
         val symbols = (ledger.value.positions.map { it.instrument.ticker } + watchlist.value).distinct()
-        if (symbols.isEmpty() || quotesLoading.value) return
+        if (symbols.isEmpty()) return
+        // A refresh asked for mid-flight (e.g. a ticker just added) runs right after, not never.
+        if (quotesLoading.value) { refreshAgain = true; return }
         quotesLoading.value = true
         viewModelScope.launch {
             try {
@@ -110,6 +115,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 quotesError.value = "Couldn't load quotes: ${e.message}"
             } finally {
                 quotesLoading.value = false
+                if (quotesError.value == null) quotesAt.value = System.currentTimeMillis()
+                if (refreshAgain) { refreshAgain = false; refreshQuotes() }
             }
         }
     }
@@ -189,7 +196,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Prefills a covered call on held shares, with a strike from today's chain when Yahoo answers. */
     val suggesting = MutableStateFlow<String?>(null)
 
-    fun coveredCallDraft(p: Position, contracts: Int, open: () -> Unit) {
+    /** A tab the app should switch to (e.g. Ledger after a CSV is shared in). */
+    val openTab = MutableStateFlow<String?>(null)
+
+    /** Set when Log Fill should open; the app navigates and clears it (safe across rotation). */
+    val openLogRequest = MutableStateFlow(false)
+
+    /** An option Positions should open the action sheet for (from a Home alert). */
+    val focusPosition = MutableStateFlow<com.abeswastaken.trades.core.model.Instrument?>(null)
+
+    fun coveredCallDraft(p: Position, contracts: Int) {
         if (suggesting.value != null) return
         val t = p.instrument.ticker
         suggesting.value = t
@@ -205,7 +221,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             draft = FillDraft.coveredCall(t, contracts, expiry, o?.strike, o?.premium, context)
             suggesting.value = null
-            open()
+            openLogRequest.value = true
         }
     }
 
@@ -329,6 +345,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 AppLog.e("Reddit check failed", e)
                 toast.value = "Reddit check failed: ${e.message}"
+                if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    val tickets = MutableStateFlow<Map<String, Work<com.abeswastaken.trades.core.engine.LongShotTicket?>>>(emptyMap())
+
+    fun loadTicket(t: String) {
+        if (tickets.value[t] is Work.Running) return
+        tickets.value = tickets.value + (t to Work.Running("Pricing the cheapest call"))
+        viewModelScope.launch {
+            val w = try { Work.Done(repo.ticket(t)) } catch (e: Exception) {
+                AppLog.e("Ticket $t failed", e); Work.Failed(e.message ?: "No option chain")
+            }
+            tickets.value = tickets.value + (t to w)
+        }
+    }
+
+    val brief = MutableStateFlow<Work<Repository.Brief>>(Work.Idle)
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            repo.lastBrief()?.let { if (brief.value is Work.Idle) brief.value = Work.Done(it) }
+        }
+    }
+
+    fun loadBrief() {
+        if (brief.value is Work.Running) return
+        val previous = brief.value
+        brief.value = Work.Running("Reading the news on your names")
+        viewModelScope.launch {
+            brief.value = try { Work.Done(repo.brief()) } catch (e: Exception) {
+                AppLog.e("Brief failed", e)
+                toast.value = "Brief failed: ${e.message}"
                 if (previous is Work.Done) previous else Work.Failed(e.message ?: e.javaClass.simpleName)
             }
         }

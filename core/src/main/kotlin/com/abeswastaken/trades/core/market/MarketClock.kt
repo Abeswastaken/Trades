@@ -20,7 +20,6 @@ object MarketClock {
     private val CLOSE = LocalTime.of(16, 0)
     private val EARLY = LocalTime.of(13, 0)
     private val PRE = LocalTime.of(4, 0)
-    private val AFTER_END = LocalTime.of(20, 0)
 
     fun session(now: ZonedDateTime): MarketSession {
         val t = now.withZoneSameInstant(NY)
@@ -36,7 +35,8 @@ object MarketClock {
             time < PRE -> MarketSession(MarketSession.Phase.CLOSED, day.atTime(OPEN).atZone(NY), early, null)
             time < OPEN -> MarketSession(MarketSession.Phase.PRE, day.atTime(OPEN).atZone(NY), early, null)
             time < close -> MarketSession(MarketSession.Phase.OPEN, day.atTime(close).atZone(NY), early, null)
-            time < AFTER_END && !early -> MarketSession(MarketSession.Phase.AFTER, nextOpen(day.plusDays(1)), false, null)
+            // After-hours runs four hours past the close (to 17:00 on early-close days).
+            time < close.plusHours(4) -> MarketSession(MarketSession.Phase.AFTER, nextOpen(day.plusDays(1)), early, null)
             else -> MarketSession(MarketSession.Phase.CLOSED, nextOpen(day.plusDays(1)), early, null)
         }
     }

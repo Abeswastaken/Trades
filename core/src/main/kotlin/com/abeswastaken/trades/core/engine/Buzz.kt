@@ -46,7 +46,30 @@ data class BuzzCheck(
     }
 }
 
+/** The cheapest sensible way to take a long-shot swing: one near out-of-the-money call. */
+data class LongShotTicket(
+    val option: com.abeswastaken.trades.core.market.OptionQuote,
+    /** What one contract costs (ask, or last trade when the market's closed). */
+    val cost: Double,
+    val breakeven: Double,
+    /** How far the stock has to rise by expiry just to break even, in percent. */
+    val movePercent: Double,
+    /** One contract as a share of cash, in percent (null when cash isn't set). */
+    val cashPercent: Double?,
+)
+
 object BuzzScreen {
+    /** Nearest strike above the price with a real offer: a 1-contract lottery ticket, max loss = what it costs. */
+    fun ticket(price: Double, calls: List<com.abeswastaken.trades.core.market.OptionQuote>, cash: Double): LongShotTicket? {
+        val o = calls.filter { it.strike > price }
+            .map { it to (if (it.ask > 0) it.ask else it.last ?: 0.0) }
+            .filter { it.second > 0 }
+            .minByOrNull { it.first.strike } ?: return null
+        val per = o.second
+        val be = o.first.strike + per
+        return LongShotTicket(o.first, per * 100, be, (be / price - 1) * 100, if (cash > 0) per * 100 / cash * 100 else null)
+    }
+
     const val SPIKE = 2.0
 
     /** Cross-checks one name. Pure, so the rules are testable. */

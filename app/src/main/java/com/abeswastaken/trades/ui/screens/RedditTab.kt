@@ -98,7 +98,7 @@ fun RedditTab(vm: AppViewModel) {
         val shots = checks.filter { it.longShot }
         if (shots.isNotEmpty()) {
             item { SectionTitle("Long shots") }
-            items(shots, key = { "shot_" + it.ticker }) { c -> LongShotCard(c, notes[c.ticker]) }
+            items(shots, key = { "shot_" + it.ticker }) { c -> LongShotCard(c, notes[c.ticker], vm) }
         }
         item { SectionTitle("Most talked about") }
         if (checks.isEmpty() && buzz is Work.Done) item { Muted("Nothing came back from Reddit right now.") }
@@ -117,7 +117,10 @@ fun askNote(c: BuzzCheck) =
 
 /** The "black mark": a crowd pile-in on a stock already making a huge move. */
 @Composable
-fun LongShotCard(c: BuzzCheck, note: BuzzNote?, modifier: Modifier = Modifier) {
+fun LongShotCard(c: BuzzCheck, note: BuzzNote?, vm: AppViewModel, modifier: Modifier = Modifier) {
+    val tickets by vm.tickets.collectAsState()
+    val watch by vm.watchlist.collectAsState()
+    val ticket = tickets[c.ticker]
     Card(
         modifier = modifier.fillMaxWidth().padding(bottom = 10.dp).testTag("longshot_${c.ticker}"),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0E0E0E), contentColor = Color.White),
@@ -143,6 +146,35 @@ fun LongShotCard(c: BuzzCheck, note: BuzzNote?, modifier: Modifier = Modifier) {
             note?.let {
                 Text("Claude: ${it.checksOut}", color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (it.redFlags.isNotBlank()) Text("Red flags: ${it.redFlags}", color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall)
+            }
+            // The ticket: what the swing actually costs, in plain numbers.
+            when (ticket) {
+                is Work.Running -> Text(ticket.step + "…", color = Color(0xFFBDBDBD), style = MaterialTheme.typography.bodySmall)
+                is Work.Failed -> Text("No ticket: ${ticket.message}", color = Color(0xFFBDBDBD), style = MaterialTheme.typography.bodySmall)
+                is Work.Done -> ticket.value?.let { t ->
+                    val o = t.option
+                    Text(
+                        "Ticket: 1 × ${o.expiry} ${qty(o.strike)}C for ${money(t.cost)}" + (if (!o.liveBid) " (last trade, market closed)" else ""),
+                        color = Color.White, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        String.format(Locale.US, "Breakeven %.2f at expiry (needs %+.0f%%). Max loss %s", t.breakeven, t.movePercent, money(t.cost)) +
+                            (t.cashPercent?.let { String.format(Locale.US, ", %.1f%% of cash.", it) } ?: "."),
+                        color = Color(0xFFE0E0E0), style = MaterialTheme.typography.bodySmall,
+                    )
+                } ?: Text("No call with an offer near the price.", color = Color(0xFFBDBDBD), style = MaterialTheme.typography.bodySmall)
+                else -> {}
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                if (ticket == null || ticket is Work.Failed) TextButton(onClick = { vm.loadTicket(c.ticker) }, modifier = Modifier.testTag("ticket_${c.ticker}")) {
+                    Text("Price the ticket", color = Color(0xFFFF8A80))
+                }
+                TextButton(onClick = { vm.addWatch(c.ticker) }, enabled = c.ticker !in watch) {
+                    Text(if (c.ticker in watch) "Watching" else "Watch", color = Color.White)
+                }
+                TextButton(onClick = { vm.askAbout(c.ticker, askNote(c) + " It's flagged as a long shot: say plainly whether it's worth a small swing.") }) {
+                    Text("Ask Claude", color = Color.White)
+                }
             }
         }
     }

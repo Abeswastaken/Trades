@@ -60,6 +60,20 @@ fun TradesApp(vm: AppViewModel) {
     LaunchedEffect(run) {
         (run as? RecRun.Done)?.let { nav.navigate("rec/${it.id}"); vm.recRun.value = RecRun.Idle }
     }
+    val openTab by vm.openTab.collectAsState()
+    LaunchedEffect(openTab) {
+        openTab?.let { t ->
+            vm.openTab.value = null
+            nav.navigate(t) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+            }
+        }
+    }
+    val openLog by vm.openLogRequest.collectAsState()
+    LaunchedEffect(openLog) {
+        if (openLog) { vm.openLogRequest.value = false; nav.navigate("log") }
+    }
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
 

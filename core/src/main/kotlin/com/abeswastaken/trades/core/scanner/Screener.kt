@@ -88,6 +88,16 @@ object CoveredCallScreener {
             ?: calls.filter { it.strike >= price && it.premium > 0 }.minByOrNull { it.strike }
     }
 
+    /**
+     * Where to roll a short call: the next expiry's same strike, or the nearest one above it, with a bid.
+     * [calls] are the next expiry's calls.
+     */
+    fun rollTo(current: com.abeswastaken.trades.core.model.Instrument, calls: List<OptionQuote>): OptionQuote? {
+        val k = current.strike ?: return null
+        val later = calls.filter { it.expiry.isAfter(current.expiry ?: LocalDate.MIN) && it.premium > 0 }
+        return later.filter { it.strike >= k - 1e-9 }.minByOrNull { it.strike }
+    }
+
     /** The Friday at least [minDays] away: this week's if there's time, otherwise next week's. */
     fun nextFriday(today: LocalDate, minDays: Int = 4): LocalDate {
         var d = today.plusDays(minDays.toLong())

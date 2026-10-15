@@ -97,10 +97,27 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         val old = dao.fill(id) ?: error("That fill no longer exists")
         val next = FillEntity.from(f.copy(id = id)).copy(createdAt = old.createdAt)
         // Replay first so an edit that breaks the ledger (e.g. a close bigger than the position) is refused.
-        Ledger.compute(dao.allFills().map { if (it.id == id) next.toFill() else it.toFill() }, 0.0)
+        val all = dao.allFills()
+        val after = Ledger.compute(all.map { if (it.id == id) next.toFill() else it.toFill() }, 0.0)
+        // Only refuse a problem the edit creates, so an already-broken ledger can still be fixed by editing.
+        if (cashAccountProblem(Ledger.compute(all.map { it.toFill() }, 0.0)) == null) cashAccountProblem(after)?.let { error(it) }
         dao.updateFill(next)
         AppLog.i("Edited fill $id: ${f.side} ${f.quantity} ${f.instrument.label} @ ${f.price}")
     }
+
+    /** A cash account can't be short stock or have calls written on shares it doesn't hold. */
+    private fun cashAccountProblem(l: LedgerState): String? {
+        l.positions.firstOrNull { it.instrument.type == AssetType.STOCK && it.quantity < 0 }?.let {
+            return "That would leave ${qtyText(-it.quantity)} ${it.instrument.ticker} shares short."
+        }
+        for (t in l.positions.map { it.instrument.ticker }.distinct()) {
+            val calls = l.shortCallContracts(t)
+            if (calls * 100 > l.sharesHeld(t) + 1e-9) return "That would leave ${qtyText(calls)} $t calls written on ${qtyText(l.sharesHeld(t))} shares."
+        }
+        return null
+    }
+
+    private fun qtyText(v: Double) = if (v == Math.floor(v)) v.toLong().toString() else v.toString()
 
     /** Option expired. Short lots are bought back at 0, long lots sold at 0. */
     suspend fun expire(p: Position, date: LocalDate) {
@@ -319,6 +336,49 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         )
         AppLog.i("Reddit check via ${model.id}: ${report.notes.map { it.ticker + ":" + it.verdict }}")
         return saved
+    }
+
+    /** A one-contract lottery ticket on a long shot: the nearest OTM call with an offer. */
+    suspend fun ticket(ticker: String): com.abeswastaken.trades.core.engine.LongShotTicket? {
+        val q = market().quotes(listOf(ticker))[ticker] ?: throw LlmException("No quote for $ticker")
+        val snap = yahoo.nearestCalls(ticker, today(), 1, 10)
+        return BuzzScreen.ticket(q.price, snap.calls, ledger().cash)
+    }
+
+    /** The next expiry's call to roll a short call into. */
+    suspend fun rollTarget(inst: Instrument): com.abeswastaken.trades.core.market.OptionQuote? {
+        val exp = inst.expiry ?: return null
+        val dte = java.time.temporal.ChronoUnit.DAYS.between(today(), exp).toInt().coerceAtLeast(0)
+        val snap = yahoo.nearestCalls(inst.ticker, today(), dte + 1, dte + 16)
+        return CoveredCallScreener.rollTo(inst, snap.calls)
+    }
+
+    data class Brief(val at: Long, val text: String, val costUsd: Double, val tickers: List<String>)
+
+    private val briefFile get() = File(filesDir, "brief.json")
+
+    fun lastBrief(): Brief? = runCatching {
+        val o = JSONObject(briefFile.readText())
+        Brief(o.getLong("at"), o.getString("text"), o.getDouble("costUsd"), o.getString("tickers").split(",").filter { it.isNotBlank() })
+    }.getOrNull()
+
+    /** Haiku reads the latest headlines on everything held or watched and says what matters. A fraction of a cent. */
+    suspend fun brief(): Brief {
+        val key = settings.apiKey() ?: throw LlmException("Add your Anthropic API key in Settings first.")
+        val tickers = (ledger().positions.map { it.instrument.ticker } + dao.allWatch().map { it.ticker }).distinct().take(12)
+        val hub = newsHub()
+        val headlines = coroutineScope {
+            val per = tickers.map { t -> async { t to runCatching { hub.ticker(t, 6) }.getOrDefault(emptyList()) } }
+            val wide = async { MARKET to runCatching { hub.market(10) }.getOrDefault(emptyList()) }
+            (per.awaitAll() + wide.await()).toMap()
+        }
+        val (text, spend) = Recommender(AnthropicLlm(key, onDowngrade = { AppLog.i(it) })).digest(headlines)
+            ?: throw LlmException("No headlines came back. Check News sources in Settings.")
+        val now = System.currentTimeMillis()
+        recordSpend(now, listOf(spend))
+        val b = Brief(now, text, spend.cost, tickers)
+        briefFile.writeText(JSONObject().put("at", now).put("text", text).put("costUsd", spend.cost).put("tickers", tickers.joinToString(",")).toString())
+        return b
     }
 
     // ---- Schwab import -------------------------------------------------------------------------

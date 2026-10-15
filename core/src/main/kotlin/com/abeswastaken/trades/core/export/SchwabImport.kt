@@ -41,7 +41,7 @@ object SchwabImport {
 
     fun preview(csv: String, existing: List<Fill>): ImportPreview {
         val rows = rows(csv)
-        val header = rows.indexOfFirst { r -> r.any { it.equals("Action", true) } && r.any { it.equals("Symbol", true) } }
+        val header = rows.indexOfFirst { r -> r.any { it.trim().equals("Action", true) } && r.any { it.trim().equals("Symbol", true) } }
         require(header >= 0) { "This doesn't look like a Schwab transactions export (no Action and Symbol columns)." }
         val cols = rows[header].map { it.trim().lowercase() }
         fun col(vararg names: String) = names.firstNotNullOfOrNull { n -> cols.indexOf(n).takeIf { it >= 0 } }
@@ -83,19 +83,27 @@ object SchwabImport {
         val out = mutableListOf<Fill>()
         var duplicates = 0
         for (row in ordered) {
-            val side = when (row.kind) {
+            // Expirations, assignments and the option leg of an exercise close whatever is held, at 0.
+            val closesOption = row.kind == Kind.EXPIRED || row.kind == Kind.ASSIGNED || (row.kind == Kind.EXERCISE && row.inst.isOption)
+            val side = if (closesOption) {
+                // Any date: the app dates an expiry on the Friday, Schwab often posts it the next business day.
+                val held = (existing + out).filter { it.instrument == row.inst }.sumOf { it.signedQuantity }
+                if (abs(held) < 1e-9) {
+                    // Already closed (logged in the app) or never held: never open a position from this row.
+                    duplicates++
+                    continue
+                }
+                if (held < 0) Side.BUY else Side.SELL
+            } else when (row.kind) {
                 Kind.BUY -> Side.BUY
                 Kind.SELL -> Side.SELL
-                Kind.EXERCISE -> if ((row.amount ?: 0.0) > 0) Side.SELL else Side.BUY
-                Kind.EXPIRED, Kind.ASSIGNED -> {
-                    val held = (existing.filter { it.date < row.date } + out).filter { it.instrument == row.inst }.sumOf { it.signedQuantity }
-                    if (held < 0) Side.BUY else Side.SELL
-                }
+                else -> if ((row.amount ?: 0.0) > 0) Side.SELL else Side.BUY
             }
-            val price = if (row.kind == Kind.EXPIRED || row.kind == Kind.ASSIGNED) 0.0 else row.price
+            val price = if (closesOption) 0.0 else row.price
             val note = when (row.kind) {
                 Kind.EXPIRED -> "Expired"
                 Kind.ASSIGNED -> "Assigned"
+                Kind.EXERCISE -> "Exercised"
                 else -> "Schwab import"
             }
             val f = Fill(0, row.date, row.inst, side, row.qty, price, row.fees, note)
@@ -104,8 +112,25 @@ object SchwabImport {
             if (left > 0) { pool[k] = left - 1; duplicates++; continue }
             out += f
         }
+        // Flag anything that would leave short stock (shares sold that were bought before the export
+        // window) or calls written on shares that aren't there. A cash account can't hold either.
+        val held = mutableMapOf<Instrument, Double>()
+        for (f in (existing + out).sortedWith(compareBy({ it.date }, { if (it.id == 0L) Long.MAX_VALUE else it.id }))) {
+            held.merge(f.instrument, f.signedQuantity, Double::plus)
+            if (f.id != 0L) continue
+            val stock = held[Instrument.stock(f.instrument.ticker)] ?: 0.0
+            if (f.instrument.type == AssetType.STOCK && stock < -1e-9) {
+                problems += "${f.date} ${f.side} ${fmt(f.quantity)} ${f.instrument.ticker} leaves ${fmt(-stock)} shares short: were they bought before this export starts? Log that buy first."
+            }
+            if (f.instrument.type == AssetType.CALL && f.side == Side.SELL) {
+                val short = held.filterKeys { it.ticker == f.instrument.ticker && it.type == AssetType.CALL }.values.filter { it < 0 }.sum()
+                if (-short * 100 > stock + 1e-9) problems += "${f.date} ${f.instrument.label}: more calls written than shares held (${fmt(stock)} shares)."
+            }
+        }
         return ImportPreview(out, duplicates, ignored, problems)
     }
+
+    private fun fmt(v: Double) = if (v == Math.floor(v)) v.toLong().toString() else v.toString()
 
     /** Same day, contract, side, size and price (to the cent) counts as the same fill. */
     private fun key(f: Fill) = listOf(f.date, f.instrument, f.side, round(f.quantity * 10000), round(f.price * 100))

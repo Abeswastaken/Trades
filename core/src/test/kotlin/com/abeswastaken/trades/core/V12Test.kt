@@ -78,6 +78,27 @@ class V12Test {
         assertEquals(2, p.fills.size)
     }
 
+    @Test fun `an expiry already marked in the app (on the Friday) isn't added again`() {
+        val call = Instrument.call("F", 13.5, LocalDate.of(2026, 10, 30))
+        val mine = listOf(
+            Fill(1, LocalDate.of(2026, 10, 13), Instrument.stock("F"), Side.BUY, 300.0, 12.08),
+            Fill(2, LocalDate.of(2026, 10, 13), call, Side.SELL, 3.0, 0.14),
+            Fill(3, LocalDate.of(2026, 10, 30), call, Side.BUY, 3.0, 0.0, note = "Expired"),
+        )
+        val p = SchwabImport.preview(schwab, mine)
+        assertTrue(p.fills.isEmpty())
+        // and an expiry for something never held doesn't open a phantom short
+        val stray = "\"Date\",\"Action\",\"Symbol\",\"Quantity\",\"Price\"\n\"10/31/2026\",\"Expired\",\"T 10/30/2026 30.00 C\",\"1\",\"\"\n"
+        assertTrue(SchwabImport.preview(stray, emptyList()).fills.isEmpty())
+    }
+
+    @Test fun `selling shares bought before the export is flagged`() {
+        val csv = "\"Date\",\"Action\",\"Symbol\",\"Quantity\",\"Price\"\n\"10/14/2026\",\"Sell\",\"F\",\"100\",\"\$12.50\"\n"
+        val p = SchwabImport.preview(csv, emptyList())
+        assertEquals(1, p.fills.size)
+        assertTrue(p.problems.single().contains("short"))
+    }
+
     @Test fun `not a schwab file says so`() {
         val e = runCatching { SchwabImport.preview("a,b,c\n1,2,3", emptyList()) }.exceptionOrNull()
         assertTrue(e!!.message!!.contains("Schwab"))
@@ -119,6 +140,8 @@ class V12Test {
         assertEquals(MarketSession.Phase.CLOSED, tg.phase)
         assertEquals(at("2026-11-27", "09:30"), tg.nextChange)
         assertEquals(LocalDate.of(2027, 3, 28), MarketClock.easter(2027))
+        assertEquals(MarketSession.Phase.AFTER, MarketClock.session(at("2026-11-27", "14:00")).phase)
+        assertEquals(MarketSession.Phase.CLOSED, MarketClock.session(at("2026-11-27", "17:30")).phase)
     }
 
     // ---- Reddit and buzz ---------------------------------------------------------------------
@@ -194,5 +217,23 @@ class V12Test {
         val text = Prompts.recommendRequest(ctx)
         assertTrue(text.contains(RiskLevel.HIGH.rules))
         assertTrue(text.contains("- GME: #1 on Reddit"))
+    }
+
+    @Test fun `long-shot ticket is the nearest OTM call with an offer`() {
+        val exp = LocalDate.of(2026, 10, 23)
+        fun c(k: Double, bid: Double, ask: Double) = com.abeswastaken.trades.core.market.OptionQuote("GME", k, exp, bid, ask, null, 10, 10)
+        val t = BuzzScreen.ticket(18.0, listOf(c(17.5, 1.2, 1.3), c(19.0, 0.0, 0.0), c(20.0, 0.40, 0.45), c(25.0, 0.05, 0.06)), 1000.0)!!
+        assertEquals(20.0, t.option.strike, 1e-9)
+        assertEquals(45.0, t.cost, 1e-9)
+        assertEquals(20.45, t.breakeven, 1e-9)
+        assertEquals((20.45 / 18 - 1) * 100, t.movePercent, 1e-9)
+        assertEquals(4.5, t.cashPercent!!, 1e-9)
+    }
+
+    @Test fun `roll target is the same strike or the next one up, next expiry`() {
+        val cur = Instrument.call("F", 13.0, LocalDate.of(2026, 10, 16))
+        val next = LocalDate.of(2026, 10, 23)
+        fun c(k: Double, bid: Double) = com.abeswastaken.trades.core.market.OptionQuote("F", k, next, bid, bid + 0.02, null, 100, 10)
+        assertEquals(13.5, com.abeswastaken.trades.core.scanner.CoveredCallScreener.rollTo(cur, listOf(c(12.5, 0.6), c(13.0, 0.0), c(13.5, 0.2)))!!.strike, 1e-9)
     }
 }

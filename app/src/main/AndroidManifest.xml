@@ -19,6 +19,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Share a Schwab transactions CSV to the app (or open it) to import it into the ledger. -->
+            <intent-filter android:label="Import to Colvin Trades ledger">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="application/csv" />
+                <data android:mimeType="application/vnd.ms-excel" />
+            </intent-filter>
         </activity>
 
         <provider

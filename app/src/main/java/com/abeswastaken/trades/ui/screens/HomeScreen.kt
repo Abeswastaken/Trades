@@ -66,7 +66,7 @@ private val clockTime = DateTimeFormatter.ofPattern("h:mm a")
 private val clockDay = DateTimeFormatter.ofPattern("EEE h:mm a")
 
 /** One thing on the dashboard that wants a decision. */
-private data class Alert(val text: String, val urgent: Boolean)
+private data class Alert(val text: String, val urgent: Boolean, val instrument: Instrument? = null)
 
 @Composable
 fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> Unit, openWatch: (Int) -> Unit) {
@@ -81,9 +81,18 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
     val buzz by vm.buzz.collectAsState()
     val report by vm.buzzReport.collectAsState()
     val scan by vm.scan.collectAsState()
+    val brief by vm.brief.collectAsState()
+    val quotesAt by vm.quotesAt.collectAsState()
 
     // Reddit buzz refreshes on open (cached 10 minutes); quotes refresh as soon as the ledger loads.
-    LaunchedEffect(Unit) { vm.loadBuzz(); vm.refreshQuotes() }
+    LaunchedEffect(Unit) {
+        vm.loadBuzz(); vm.refreshQuotes()
+        // While the market's open, keep prices and option marks fresh without a tap.
+        while (true) {
+            delay(5 * 60_000L)
+            if (MarketClock.session(ZonedDateTime.now()).phase == MarketSession.Phase.OPEN) { vm.refreshQuotes(); vm.loadBuzz() }
+        }
+    }
 
     var model by remember(settings.defaultModel) { mutableStateOf(settings.defaultModel) }
     var focus by rememberSaveable { mutableStateOf("") }
@@ -128,23 +137,73 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
 
         item {
             SectionTitle("Needs you")
-            InfoCard(Modifier.clickable(enabled = alerts.isNotEmpty(), onClick = openPositions).testTag("home_alerts")) {
+            InfoCard(Modifier.testTag("home_alerts")) {
                 if (alerts.isEmpty()) Muted("Nothing needs a decision right now.")
+                // Each alert opens straight to what can be done about it.
                 alerts.forEach { a ->
                     Text(
-                        "• ${a.text}", style = MaterialTheme.typography.bodyMedium,
+                        "• ${a.text}${if (a.instrument != null) "  ›" else ""}", style = MaterialTheme.typography.bodyMedium,
                         color = if (a.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(vertical = 2.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { vm.focusPosition.value = a.instrument; openPositions() }.padding(vertical = 4.dp),
                     )
                 }
-                if (alerts.isNotEmpty()) Text("Open Positions ›", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+
+        val held = ledger.positions.sortedWith(compareBy({ it.instrument.ticker }, { it.instrument.isOption }, { it.instrument.expiry }))
+        if (held.isNotEmpty()) item {
+            SectionTitle("Holdings")
+            InfoCard(Modifier.testTag("home_holdings")) {
+                held.forEach { p ->
+                    val inst = p.instrument
+                    val q = quotes[inst.ticker]
+                    Row(
+                        Modifier.fillMaxWidth().clickable { if (inst.isOption) vm.focusPosition.value = inst; openPositions() }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (inst.isOption) inst.label.removePrefix(inst.ticker + " ") else inst.ticker, fontWeight = if (inst.isOption) FontWeight.Normal else FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        if (!inst.isOption) {
+                            Text("${qty(p.quantity)} @ ${q?.let { px(it.price) } ?: "?"}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
+                            q?.changePercent?.let { Text(pct(it), color = pnlColor(it), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp)) }
+                            q?.let { val u = (it.price - p.avgCost) * p.quantity; Text(signedMoney(u), color = pnlColor(u), style = MaterialTheme.typography.bodySmall) }
+                        } else {
+                            val dte = inst.expiry?.let { ChronoUnit.DAYS.between(now, it) }
+                            Text("${if (p.quantity < 0) "short" else "long"} ${qty(abs(p.quantity))} · ${dte ?: "?"}d", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
+                            marks[inst]?.let { m ->
+                                m.premiumCapturedPercent?.let { Text("${it.toInt()}% kept", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp)) }
+                                Text(signedMoney(m.unrealized), color = pnlColor(m.unrealized), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                quotesAt?.let { Muted("Prices as of ${Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(clockTime)}" + if (MarketClock.session(ZonedDateTime.now()).phase == MarketSession.Phase.OPEN) " · refreshes every 5 min" else "") }
+            }
+        }
+
+        item {
+            SectionTitle("News on your names")
+            InfoCard(Modifier.testTag("home_brief")) {
+                when (val b = brief) {
+                    is Work.Running -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Text(b.step + "…")
+                    }
+                    is Work.Done -> {
+                        Text(b.value.text, style = MaterialTheme.typography.bodyMedium)
+                        Muted("${Instant.ofEpochMilli(b.value.at).atZone(ZoneId.systemDefault()).format(recDate)} · ${b.value.tickers.size} names · ${money(b.value.costUsd)}", Modifier.padding(top = 4.dp))
+                    }
+                    is Work.Failed -> Text(b.message, color = MaterialTheme.colorScheme.error)
+                    else -> Muted("Haiku reads every source's latest headlines on what you hold and watch, plus the market, and says what matters. A fraction of a cent.")
+                }
+                if (brief !is Work.Running) TextButton(onClick = { vm.loadBrief() }, enabled = settings.hasApiKey) {
+                    Text(if (brief is Work.Done) "Refresh the brief" else "Brief me")
+                }
             }
         }
 
         val shots = checks.filter { it.longShot }.take(3)
         if (shots.isNotEmpty()) {
             item { SectionTitle("Long shots") }
-            items(shots, key = { "home_shot_" + it.ticker }) { c -> LongShotCard(c, notes[c.ticker], Modifier.clickable { openWatch(2) }) }
+            items(shots, key = { "home_shot_" + it.ticker }) { c -> LongShotCard(c, notes[c.ticker], vm) }
         }
 
         item {
@@ -266,16 +325,16 @@ private fun alerts(ledger: LedgerState, quotes: Map<String, Quote>, marks: Map<I
         val short = p.quantity < 0
         val q = quotes[inst.ticker]
         val k = inst.strike
-        if (dte < 0) { out += Alert("${inst.label} is past expiry: mark it expired or assigned", true); continue }
+        if (dte < 0) { out += Alert("${inst.label} is past expiry: mark it expired or assigned", true, inst); continue }
         val itm = short && q != null && k != null &&
             ((inst.type == AssetType.CALL && q.price >= k) || (inst.type == AssetType.PUT && q.price <= k))
-        if (itm) out += Alert("${inst.label} is in the money (stock ${px(q!!.price)}): assignment likely", true)
-        if (dte <= 5) out += Alert("${inst.label} expires in $dte day${if (dte == 1L) "" else "s"}", false)
+        if (itm) out += Alert("${inst.label} is in the money (stock ${px(q!!.price)}): assignment likely", true, inst)
+        if (dte <= 5) out += Alert("${inst.label} expires in $dte day${if (dte == 1L) "" else "s"}", false, inst)
         q?.nextEarnings?.takeIf { !it.isBefore(today) && !it.isAfter(exp) }?.let {
-            out += Alert("${inst.ticker} reports earnings $it, before ${inst.label} expires", true)
+            out += Alert("${inst.ticker} reports earnings $it, before ${inst.label} expires", true, inst)
         }
         marks[inst]?.premiumCapturedPercent?.takeIf { short && it >= 80 && dte > 2 }?.let {
-            out += Alert("${inst.label}: ${it.toInt()}% of the premium is captured, worth buying back?", false)
+            out += Alert("${inst.label}: ${it.toInt()}% of the premium is captured, worth buying back?", false, inst)
         }
     }
     for (p in ledger.positions.filter { it.instrument.type == AssetType.STOCK }) {

@@ -71,6 +71,14 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     // Mark to market every time the screen opens.
     LaunchedEffect(Unit) { vm.refreshQuotes() }
 
+    // A Home alert can ask for one option's action sheet.
+    val focus by vm.focusPosition.collectAsState()
+    LaunchedEffect(focus, ledger) {
+        val f = focus ?: return@LaunchedEffect
+        ledger.positions.firstOrNull { it.instrument == f }?.let { sheet = it }
+        vm.focusPosition.value = null
+    }
+
     val stocks = ledger.positions.filter { it.instrument.type == AssetType.STOCK }
     val options = ledger.positions.filter { it.instrument.isOption }.sortedBy { it.instrument.expiry }
     val unrealized = stocks.sumOf { p -> quotes[p.instrument.ticker]?.let { (it.price - p.avgCost) * p.quantity } ?: 0.0 }
@@ -100,7 +108,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
                 val coverable = ledger.coverableContracts(p.instrument.ticker)
                 StockRow(
                     p, quotes[p.instrument.ticker], coverable, busy = suggesting == p.instrument.ticker,
-                    onCoveredCall = { vm.coveredCallDraft(p, coverable, openLog) },
+                    onCoveredCall = { vm.coveredCallDraft(p, coverable) },
                     onSell = { vm.startDraft(FillDraft.close(p, quotes[p.instrument.ticker]?.price)); openLog() },
                 )
             }
@@ -142,7 +150,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     } }
 
     rolling?.let { p ->
-        RollDialog(p, marks[p.instrument], onDismiss = { rolling = null }) { fills ->
+        RollDialog(p, marks[p.instrument], suggest = { vm.repo.rollTarget(p.instrument) }, onDismiss = { rolling = null }) { fills ->
             vm.roll(fills)
             rolling = null
         }
@@ -186,7 +194,10 @@ private fun EventDialog(what: Event, p: Position, onDismiss: () -> Unit, onConfi
 
 /** Close the current option and open the next one, as two fills logged together. */
 @Composable
-private fun RollDialog(p: Position, mark: OptionMark?, onDismiss: () -> Unit, onSave: (List<com.abeswastaken.trades.core.model.Fill>) -> Unit) {
+private fun RollDialog(
+    p: Position, mark: OptionMark?, suggest: suspend () -> com.abeswastaken.trades.core.market.OptionQuote?,
+    onDismiss: () -> Unit, onSave: (List<com.abeswastaken.trades.core.model.Fill>) -> Unit,
+) {
     val inst = p.instrument
     val short = p.quantity < 0
     val nextFriday = (inst.expiry ?: LocalDate.now()).plusDays(7)
@@ -195,6 +206,18 @@ private fun RollDialog(p: Position, mark: OptionMark?, onDismiss: () -> Unit, on
     var expiry by remember { mutableStateOf(nextFriday.toString()) }
     var premium by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(LocalDate.now().toString()) }
+    // Short calls: prefill next week's same (or next-higher) strike from today's chain.
+    val lookUp = short && inst.type == AssetType.CALL
+    var hint by remember { mutableStateOf(if (lookUp) "Looking up next week's call…" else null) }
+    LaunchedEffect(Unit) {
+        if (!lookUp) return@LaunchedEffect
+        val o = runCatching { kotlinx.coroutines.withTimeoutOrNull(8_000) { suggest() } }.getOrNull()
+        if (o == null) { hint = null; return@LaunchedEffect }
+        strike = qty(o.strike)
+        expiry = o.expiry.toString()
+        if (premium.isBlank()) premium = px(o.premium)
+        hint = "From today's chain: ${o.expiry} ${qty(o.strike)}C, ${if (o.liveBid) "bid" else "last trade"} ${px(o.premium)}. Use what Schwab fills."
+    }
     val fills = runCatching {
         OptionEvents.roll(
             p, close.toDouble(), strike.toDouble(), LocalDate.parse(expiry.trim()), premium.toDouble(), LocalDate.parse(date.trim()),
@@ -206,6 +229,7 @@ private fun RollDialog(p: Position, mark: OptionMark?, onDismiss: () -> Unit, on
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Muted("${qty(abs(p.quantity))} contract(s). Enter what Schwab filled for each leg.")
+                hint?.let { Muted(it) }
                 RollField(close, { close = it }, if (short) "Buy back at" else "Sell at", "roll_close")
                 RollField(strike, { strike = it }, "New strike", "roll_strike")
                 OutlinedTextField(expiry, { expiry = it }, label = { Text("New expiry (YYYY-MM-DD)") }, singleLine = true)
