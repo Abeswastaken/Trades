@@ -113,7 +113,7 @@ class AppFlowTest {
         waitForText("Confirm")
         rule.onNodeWithText("Confirm").tap()
         rule.onNodeWithTag("tab_ledger").performClick()
-        waitForText("(expired)")
+        waitForText("Expired")
 
         // Tap a fill to edit it.
         rule.onAllNodes(hasText("Buy 100 ZZQX", substring = true) and hasClickAction()).onFirst().tap()
