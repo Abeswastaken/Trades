@@ -91,7 +91,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
                 IconButton(onClick = { vm.refreshQuotes() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh quotes") }
             },
         )
-        LazyColumn(Modifier.padding(horizontal = 16.dp)) {
+        LazyColumn(Modifier.padding(horizontal = 16.dp).testTag("positions_list")) {
             item {
                 InfoCard {
                     KeyValue("Cash", money(ledger.cash))

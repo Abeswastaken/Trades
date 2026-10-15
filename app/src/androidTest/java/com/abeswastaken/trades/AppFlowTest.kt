@@ -3,6 +3,7 @@ package com.abeswastaken.trades
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -89,8 +90,9 @@ class AppFlowTest {
         rule.onNodeWithTag("field_price").performTextInput("0.20")
         rule.onNodeWithTag("save_fill").performScrollTo().performClick()
 
-        // Tap the option, mark it expired.
-        waitForText("11C")
+        // Saved: the form closes. Then scroll the positions list down to the option and tap it.
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithTag("positions_list").performScrollToNode(hasText("11C", substring = true))
         rule.onAllNodes(hasText("11C", substring = true) and hasClickAction()).onFirst().performSemanticsAction(SemanticsActions.OnClick)
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("option_expire").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("option_expire").performClick()
