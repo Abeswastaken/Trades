@@ -1,0 +1,14 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/captures
+.kotlin/
+# Release keys never go in this repo. app/debug.keystore is a shared debug key on purpose
+# (so every CI build installs over the last one without wiping the ledger).
+*.jks
+release.keystore
+keystore.properties
+.env

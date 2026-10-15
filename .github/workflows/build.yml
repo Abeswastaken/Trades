@@ -1,0 +1,41 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Tests and debug APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+        run: ./gradlew :core:test testDebugUnitTest assembleDebug
+      - name: Name the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk "colvin-trades-1.0.${{ github.run_number }}-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: colvin-trades-debug
+          path: colvin-trades-*-debug.apk
+      # Every build of main becomes a downloadable release, so the APK can be grabbed straight from a phone.
+      - name: Publish build from main
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Colvin Trades 1.0.${{ github.run_number }}
+          prerelease: true
+          files: colvin-trades-*-debug.apk
