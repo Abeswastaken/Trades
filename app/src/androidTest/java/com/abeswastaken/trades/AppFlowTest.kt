@@ -1,5 +1,9 @@
 package com.abeswastaken.trades
 
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -73,7 +77,8 @@ class AppFlowTest {
 
         rule.onNodeWithTag("tab_positions").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("cc_ZZQX").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("cc_ZZQX").performScrollTo().performClick()
+        // Quotes refresh as Positions opens and shift the list, which can swallow a touch; invoke the button's click directly.
+        rule.onNodeWithTag("cc_ZZQX").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
         rule.waitUntil(20_000) { rule.onAllNodesWithText("Covered call on", substring = true).fetchSemanticsNodes().isNotEmpty() }
         rule.waitUntil(25_000) { rule.onAllNodesWithTag("field_strike", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("field_qty").assertTextContains("1")
@@ -85,7 +90,7 @@ class AppFlowTest {
 
         // Tap the option, mark it expired.
         waitForText("11C")
-        rule.onAllNodesWithText("11C", substring = true).onFirst().performClick()
+        rule.onAllNodes(hasText("11C", substring = true) and hasClickAction()).onFirst().performSemanticsAction(SemanticsActions.OnClick)
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("option_expire").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("option_expire").performClick()
         rule.onNodeWithText("Confirm").performClick()
