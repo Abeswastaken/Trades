@@ -41,6 +41,12 @@ class LiveSmokeTest {
             val s = yahoo.nearestCalls("F", today, 1, 10)
             "${s.expirations.take(6)} calls=${s.calls.size} weeklies=${CoveredCallScreener.hasWeeklies(s.expirations, today)}"
         }
+        for (sym in listOf("F", "SOFI", "NOK")) report("chain $sym") {
+            val price = yahoo.quotes(listOf(sym))[sym]!!.price
+            val s = yahoo.nearestCalls(sym, today, 4, 10)
+            "price $price " + s.calls.filter { it.strike >= price * 0.97 }.sortedBy { it.strike }.take(4)
+                .joinToString { "${it.expiry} ${it.strike} b${it.bid}/a${it.ask} l${it.last} oi${it.openInterest}" }
+        }
         report("screener run") {
             val r = CoveredCallScreener.run(yahoo, yahoo, today, ScreenerRules(universe = 20))
             "${r.universeSource} scanned=${r.scanned} noWeeklies=${r.noWeeklies} errors=${r.errors.size} top=" +
