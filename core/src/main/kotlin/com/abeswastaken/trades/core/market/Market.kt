@@ -24,6 +24,12 @@ data class OptionQuote(
     val volume: Long,
 ) {
     val mid get() = if (bid > 0 && ask > 0) (bid + ask) / 2 else (last ?: bid)
+
+    /** False when there's no live bid (Yahoo shows 0 outside market hours); [premium] is then the last trade. */
+    val liveBid get() = bid > 0
+
+    /** What writing this call should bring in: the bid, or the last trade when the market is closed. */
+    val premium get() = if (bid > 0) bid else (last ?: 0.0)
 }
 
 data class Headline(

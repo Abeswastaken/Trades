@@ -269,7 +269,7 @@ fun ScreenerTab(vm: AppViewModel, openRec: (Long) -> Unit) {
                     vm.askAbout(
                         h.quote.symbol,
                         "Covered-call finder hit: buy 100 ${h.quote.symbol} near ${px(h.quote.price)} and sell the " +
-                            "${o.expiry} ${px(o.strike)} call for about ${px(o.bid)} (${String.format(java.util.Locale.US, "%.1f", h.annualizedPercent)}% annualized). " +
+                            "${o.expiry} ${px(o.strike)} call for about ${px(o.premium)} (${String.format(java.util.Locale.US, "%.1f", h.annualizedPercent)}% annualized). " +
                             "Check it and recommend it, a better strike or expiry, or HOLD.",
                         openRec,
                     )
@@ -295,7 +295,8 @@ private fun HitCard(h: ScreenerHit, cash: Double, watched: Boolean, onWatch: () 
             }
         }
         Text(
-            "Sell ${o.expiry.format(shortDate)} ${px(o.strike)}C · bid ${px(o.bid)} · ${h.dte} days",
+            "Sell ${o.expiry.format(shortDate)} ${px(o.strike)}C · " +
+                (if (o.liveBid) "bid ${px(o.bid)}" else "last ${px(o.premium)}") + " · ${h.dte} days",
             modifier = Modifier.padding(top = 6.dp),
         )
         KeyValue("Premium", String.format(java.util.Locale.US, "%.2f%% (%.0f%% a year)", h.premiumPercent, h.annualizedPercent))
@@ -304,6 +305,7 @@ private fun HitCard(h: ScreenerHit, cash: Double, watched: Boolean, onWatch: () 
         KeyValue("Open interest", o.openInterest.toString())
         val notes = listOfNotNull(
             if (h.weeklies) "weeklies" else "monthlies only",
+            if (!o.liveBid) "market closed: premium is the last trade" else null,
             h.quote.nextEarnings?.takeIf { !it.isAfter(o.expiry) }?.let { "earnings ${it.format(shortDate)} before expiry" },
             if (cash > 0 && h.netCostPer100 > cash) "more than your cash" else null,
         )

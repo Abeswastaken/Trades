@@ -69,21 +69,21 @@ object CoveredCallScanner {
         if (dte < rules.minDte || dte > rules.maxDte) return false
         if (o.strike < q.price * (1 + rules.minOtmPercent / 100)) return false
         if (o.openInterest < rules.minOpenInterest) return false
-        if (o.bid < rules.minBid) return false
-        if (o.bid / q.price * 100 < rules.minPremiumPercent) return false
+        if (o.premium < rules.minBid) return false
+        if (o.premium / q.price * 100 < rules.minPremiumPercent) return false
         return true
     }
 
     fun toCandidate(kind: CandidateKind, q: Quote, o: OptionQuote, today: LocalDate, contracts: Int): CallCandidate {
         val dte = ChronoUnit.DAYS.between(today, o.expiry).coerceAtLeast(1)
-        val prem = o.bid / q.price * 100
+        val prem = o.premium / q.price * 100
         return CallCandidate(
             kind = kind, quote = q, option = o, dte = dte,
             premiumPercent = prem,
             annualizedPercent = prem * 365.0 / dte,
             otmPercent = (o.strike / q.price - 1) * 100,
             contracts = contracts,
-            netCostPerContract = (q.price - o.bid) * 100,
+            netCostPerContract = (q.price - o.premium) * 100,
         )
     }
 

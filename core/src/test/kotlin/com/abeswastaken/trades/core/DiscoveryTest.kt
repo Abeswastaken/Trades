@@ -111,6 +111,8 @@ class DiscoveryTest {
             <pubDate>Wed, 14 Oct 2026 08:00:00 EDT</pubDate><link>https://x</link></item></channel></rss>"""
         val h = Rss.parse("MARKET", xml, "MarketWatch").single()
         assertEquals("A & B", h.title)
+        val curly = Rss.parse("M", "<item><title>Anthropic&#x2019;s growth &#8212; slows</title></item>", "x").single()
+        assertEquals("Anthropic\u2019s growth \u2014 slows", curly.title)
         assertEquals(1791979200L, h.publishedEpochSec) // 08:00 EDT = 12:00Z
     }
 
@@ -141,6 +143,14 @@ class DiscoveryTest {
         assertEquals(0.08 / 12.20 * 100, hit.premiumPercent, 1e-9)
         assertEquals((0.08 + 13.0 - 12.20) / 12.20 * 100, hit.ifCalledPercent, 1e-9)
         assertNull(CoveredCallScreener.best(q, ChainSnapshot(monthly, snap.calls), today, ScreenerRules()))
+    }
+
+    @Test fun `with the market closed the last trade stands in for the missing bid`() {
+        val q = Quote("F", 12.20, avgVolume = 50_000_000)
+        val closed = OptionQuote("F", 12.5, today.plusDays(8), 0.0, 0.0, 0.11, 900, 0)
+        val hit = CoveredCallScreener.best(q, ChainSnapshot(weekly, listOf(closed)), today, ScreenerRules())!!
+        assertFalse(hit.option.liveBid)
+        assertEquals(0.11 / 12.20 * 100, hit.premiumPercent, 1e-9)
     }
 
     private class FakeDiscovery(

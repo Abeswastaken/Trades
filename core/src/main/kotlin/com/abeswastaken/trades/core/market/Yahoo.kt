@@ -259,5 +259,12 @@ object Rss {
         .removePrefix("<![CDATA[").removeSuffix("]]>")
         .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
         .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
+        .replace(numericEntity) { m ->
+            val v = m.groupValues[1]
+            val code = if (v.startsWith("x", ignoreCase = true)) v.substring(1).toIntOrNull(16) else v.toIntOrNull()
+            code?.let { String(Character.toChars(it)) } ?: m.value
+        }
         .trim()
+
+    private val numericEntity = Regex("&#(x?[0-9a-fA-F]+);")
 }

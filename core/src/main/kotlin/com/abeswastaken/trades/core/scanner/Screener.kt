@@ -19,8 +19,8 @@ data class ScreenerRules(
     val maxPrice: Double = 20.0,
     val minAvgVolume: Long = 1_000_000,
     val weekliesOnly: Boolean = true,
-    /** Expiry window for the call to write. 1–10 days means "this week's or next week's". */
-    val minDte: Int = 1,
+    /** Expiry window for the call to write. 4–10 days is next Friday's from any weekday. */
+    val minDte: Int = 4,
     val maxDte: Int = 10,
     val minOtmPercent: Double = 0.0,
     val minOpenInterest: Long = 50,
@@ -43,7 +43,7 @@ data class ScreenerHit(
     val netCostPer100: Double,
 ) {
     /** Return if the shares are called away at the strike: premium plus the gain to the strike. */
-    val ifCalledPercent get() = (option.bid + option.strike - quote.price) / quote.price * 100
+    val ifCalledPercent get() = (option.premium + option.strike - quote.price) / quote.price * 100
 }
 
 data class ScreenerResult(
@@ -61,20 +61,20 @@ object CoveredCallScreener {
     fun hasWeeklies(expirations: List<LocalDate>, today: LocalDate): Boolean =
         expirations.count { ChronoUnit.DAYS.between(today, it) in 0..35 } >= 4
 
-    /** Picks the call to write: the nearest strike at or above the OTM floor that passes OI and bid. */
+    /** Picks the call to write: the nearest strike at or above the OTM floor that passes OI and premium. */
     fun best(q: Quote, snap: ChainSnapshot, today: LocalDate, rules: ScreenerRules): ScreenerHit? {
         val weeklies = hasWeeklies(snap.expirations, today)
         if (rules.weekliesOnly && !weeklies) return null
         val floor = q.price * (1 + rules.minOtmPercent / 100)
         val o = snap.calls
             .filter { ChronoUnit.DAYS.between(today, it.expiry) in rules.minDte..rules.maxDte }
-            .filter { it.strike >= floor && it.openInterest >= rules.minOpenInterest && it.bid >= rules.minBid }
+            .filter { it.strike >= floor && it.openInterest >= rules.minOpenInterest && it.premium >= rules.minBid }
             .minByOrNull { it.strike } ?: return null
         val dte = ChronoUnit.DAYS.between(today, o.expiry).coerceAtLeast(1)
-        val prem = o.bid / q.price * 100
+        val prem = o.premium / q.price * 100
         return ScreenerHit(
             quote = q, option = o, dte = dte, premiumPercent = prem, annualizedPercent = prem * 365.0 / dte,
-            otmPercent = (o.strike / q.price - 1) * 100, weeklies = weeklies, netCostPer100 = (q.price - o.bid) * 100,
+            otmPercent = (o.strike / q.price - 1) * 100, weeklies = weeklies, netCostPer100 = (q.price - o.premium) * 100,
         )
     }
 
