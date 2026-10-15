@@ -57,6 +57,10 @@ android {
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
+// Debug and release both export the same Room schema file; run in parallel, one can read it half-written
+// ("Empty schema file"). Run them one after the other.
+tasks.matching { it.name == "kspReleaseKotlin" }.configureEach { mustRunAfter("kspDebugKotlin") }
+
 dependencies {
     implementation(project(":core"))
     implementation(libs.androidx.core.ktx)
