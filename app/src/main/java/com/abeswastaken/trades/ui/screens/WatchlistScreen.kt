@@ -25,12 +25,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -47,23 +51,41 @@ import com.abeswastaken.trades.ui.theme.pnlColor
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WatchlistScreen(vm: AppViewModel) {
+fun WatchlistScreen(vm: AppViewModel, openRec: (Long) -> Unit) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val loading by vm.quotesLoading.collectAsState()
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Watchlist") },
+            actions = {
+                if (tab == 0) IconButton(onClick = { vm.refreshQuotes() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") }
+            },
+        )
+        TabRow(selectedTabIndex = tab) {
+            listOf("Watchlist", "Market", "Covered calls").forEachIndexed { i, label ->
+                Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) }, modifier = Modifier.testTag("watch_tab_$i"))
+            }
+        }
+        when (tab) {
+            0 -> WatchTab(vm)
+            1 -> MarketTab(vm, openRec)
+            else -> ScreenerTab(vm, openRec)
+        }
+    }
+}
+
+@Composable
+private fun WatchTab(vm: AppViewModel) {
     val watch by vm.watchlist.collectAsState()
     val quotes by vm.quotes.collectAsState()
     val news by vm.news.collectAsState()
-    val loading by vm.quotesLoading.collectAsState()
-    val context = LocalContext.current
     var input by rememberSaveable { mutableStateOf("") }
     var open by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(watch) { vm.refreshQuotes() }
 
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Watchlist") },
-            actions = { IconButton(onClick = { vm.refreshQuotes() }, enabled = !loading) { Icon(Icons.Filled.Refresh, "Refresh") } },
-        )
-        Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             val add = { if (input.isNotBlank()) { vm.addWatch(input); input = "" } }
             OutlinedTextField(
                 input, { input = it.uppercase() }, label = { Text("Add ticker") }, singleLine = true,
@@ -106,14 +128,7 @@ fun WatchlistScreen(vm: AppViewModel) {
                             when {
                                 list == null -> Muted("Loading headlines…")
                                 list.isEmpty() -> Muted("No headlines found.")
-                                else -> list.forEach { h ->
-                                    Text(
-                                        "• " + h.title, style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.clickable(enabled = h.url != null) {
-                                            h.url?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
-                                        },
-                                    )
-                                }
+                                else -> list.forEach { h -> HeadlineRow(h) }
                             }
                         }
                     }
@@ -122,5 +137,34 @@ fun WatchlistScreen(vm: AppViewModel) {
             }
             item { Spacer(Modifier.height(24.dp)) }
         }
+    }
+}
+
+/** One headline: tap to open it; shows the outlet, age and sentiment when the source scores stories. */
+@Composable
+fun HeadlineRow(h: com.abeswastaken.trades.core.market.Headline) {
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxWidth().clickable(enabled = h.url != null) {
+            h.url?.let { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }
+        }.padding(vertical = 4.dp)
+    ) {
+        Text(h.title, style = MaterialTheme.typography.bodySmall)
+        val meta = listOfNotNull(
+            h.source.takeIf { it.isNotBlank() },
+            h.publishedEpochSec?.let { age(it) },
+            h.sentiment?.let { String.format(java.util.Locale.US, "sentiment %+.2f", it) },
+        ).joinToString(" · ")
+        if (meta.isNotEmpty()) Muted(meta)
+    }
+}
+
+private fun age(epochSec: Long): String {
+    val mins = (System.currentTimeMillis() / 1000 - epochSec) / 60
+    return when {
+        mins < 1 -> "just now"
+        mins < 60 -> "${mins}m ago"
+        mins < 48 * 60 -> "${mins / 60}h ago"
+        else -> "${mins / 1440}d ago"
     }
 }

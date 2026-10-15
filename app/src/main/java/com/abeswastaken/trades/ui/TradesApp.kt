@@ -96,7 +96,7 @@ fun TradesApp(vm: AppViewModel) {
             }
             composable("positions") { PositionsScreen(vm, openLog = { nav.navigate("log") }) }
             composable("ledger") { LedgerScreen(vm, openLog = { nav.navigate("log") }) }
-            composable("watch") { WatchlistScreen(vm) }
+            composable("watch") { WatchlistScreen(vm, openRec = { nav.navigate("rec/$it") }) }
             composable("settings") { SettingsScreen(vm) }
             composable("rec/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
                 RecommendationScreen(

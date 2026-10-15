@@ -34,13 +34,25 @@ import kotlinx.coroutines.coroutineScope
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
+import com.abeswastaken.trades.core.engine.MarketCandidates
+import com.abeswastaken.trades.core.engine.MarketScanContext
+import com.abeswastaken.trades.core.engine.MarketScanReply
+import com.abeswastaken.trades.core.engine.MarketScanner
+import com.abeswastaken.trades.core.engine.SpendItem
+import com.abeswastaken.trades.core.market.MARKET
+import com.abeswastaken.trades.core.market.NewsHub
+import com.abeswastaken.trades.core.market.NewsSourceId
+import com.abeswastaken.trades.core.market.NewsSources
+import com.abeswastaken.trades.core.scanner.CoveredCallScreener
+import com.abeswastaken.trades.core.scanner.ScreenerResult
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
-class Repository(private val db: TradesDb, val settings: SettingsStore) {
+class Repository(private val db: TradesDb, val settings: SettingsStore, private val filesDir: File) {
     private val dao = db.dao()
     private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
     private val yahoo = YahooMarketData(http)
@@ -98,7 +110,82 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
     suspend fun quotes(symbols: List<String>): Map<String, Quote> =
         if (symbols.isEmpty()) emptyMap() else market().quotes(symbols.distinct())
 
-    suspend fun news(symbol: String): List<Headline> = market().news(symbol, 8)
+    fun newsHub(): NewsHub {
+        val s = settings.state.value
+        return NewsHub(NewsSources.build(http, s.newsSources, s.newsKeys)) { AppLog.i(it) }
+    }
+
+    suspend fun news(symbol: String): List<Headline> = newsHub().ticker(symbol, 10)
+
+    suspend fun marketNews(): List<Headline> = newsHub().market(30)
+
+    /** Pulls three AAPL headlines from one source, so a key can be checked before relying on it. */
+    suspend fun testNewsSource(id: NewsSourceId, key: String): String = try {
+        val p = NewsSources.build(http, setOf(id), mapOf(id to key)).firstOrNull() ?: return "Enter a key first."
+        val n = p.ticker("AAPL", 3).ifEmpty { p.market(3) }
+        if (n.isEmpty()) "${id.label} answered but had no headlines." else "Works: \"${n.first().title.take(70)}\""
+    } catch (e: Exception) {
+        AppLog.e("${id.label} test failed", e)
+        "${id.label} failed: ${e.message}"
+    }
+
+    // ---- Discovery -----------------------------------------------------------------------------
+
+    suspend fun screen(onProgress: (String) -> Unit): ScreenerResult {
+        val r = CoveredCallScreener.run(yahoo, market(), today(), settings.state.value.screener, onProgress)
+        r.errors.forEach { (sym, e) -> AppLog.i("Screener $sym: $e") }
+        AppLog.i("Screener: ${r.hits.size} hits from ${r.scanned} (${r.universeSource}), ${r.noWeeklies} without weeklies")
+        return r
+    }
+
+    /** A saved market scan, so the last one survives a restart. */
+    data class SavedScan(val at: Long, val model: String, val costUsd: Double, val reply: MarketScanReply, val candidates: Int, val headlines: Int)
+
+    private val scanFile get() = File(filesDir, "market_scan.json")
+
+    fun lastScan(): SavedScan? = runCatching {
+        val o = JSONObject(scanFile.readText())
+        SavedScan(
+            o.getLong("at"), o.getString("model"), o.getDouble("costUsd"),
+            MarketScanner.parse(o.getString("reply")), o.optInt("candidates"), o.optInt("headlines"),
+        )
+    }.getOrNull()
+
+    suspend fun marketScan(model: ClaudeModel, focus: String?, onProgress: (String) -> Unit): SavedScan {
+        val s = settings.state.value
+        val key = settings.apiKey() ?: throw LlmException("Add your Anthropic API key in Settings first.")
+        val ledger = ledger()
+        val exclude = (dao.allWatch().map { it.ticker } + ledger.positions.map { it.instrument.ticker }).toSet()
+        onProgress("Finding movers, most active and trending stocks")
+        val candidates = MarketCandidates.gather(yahoo, market(), s.rules, ledger.cash, exclude) { AppLog.i(it) }
+        onProgress("Reading market news from ${s.newsSources.size} sources")
+        val headlines = runCatching { marketNews() }.getOrDefault(emptyList())
+        onProgress("Asking ${model.label} to pick from ${candidates.size} stocks")
+        val result = MarketScanner(AnthropicLlm(key, onDowngrade = { AppLog.i(it) }))
+            .scan(model, MarketScanContext(today(), ledger.cash, candidates, headlines, focus))
+        if (result.dropped.isNotEmpty()) AppLog.i("Market scan dropped picks not in the list: ${result.dropped}")
+        val now = System.currentTimeMillis()
+        recordSpend(now, result.spend)
+        val saved = SavedScan(now, result.spend.last().servedModel, result.spend.sumOf { it.cost }, result.reply, candidates.size, headlines.size)
+        scanFile.writeText(
+            JSONObject().put("at", saved.at).put("model", saved.model).put("costUsd", saved.costUsd)
+                .put("reply", MarketScanner.encode(saved.reply)).put("candidates", saved.candidates).put("headlines", saved.headlines)
+                .toString()
+        )
+        AppLog.i("Market scan via ${model.id}: ${result.reply.picks.map { it.ticker }} (\$${"%.4f".format(saved.costUsd)})")
+        return saved
+    }
+
+    private suspend fun recordSpend(now: Long, spend: List<SpendItem>) = dao.insertSpend(spend.map {
+        SpendEntity(
+            ts = now, purpose = it.purpose, model = it.servedModel,
+            inputTokens = it.usage.inputTokens, outputTokens = it.usage.outputTokens,
+            cacheReadTokens = it.usage.cacheReadTokens, cacheWriteTokens = it.usage.cacheWriteTokens,
+            costUsd = it.cost,
+        )
+    })
+
+    private fun today() = LocalDate.now(ZoneId.of("America/New_York"))
 
     suspend fun optionMarks(positions: List<Position>): Map<Instrument, OptionMark> =
         OptionMarks.fetch(market(), positions, LocalDate.now(ZoneId.of("America/New_York"))) { AppLog.i(it) }
@@ -161,10 +248,13 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
         scan.errors.forEach { (sym, e) -> AppLog.i("Scan $sym: $e") }
 
         onProgress("Reading the news")
+        val hub = newsHub()
         val headlines = coroutineScope {
-            universe.take(MAX_NEWS_TICKERS).map { sym ->
-                async { sym to runCatching { market.news(sym, 6) }.getOrDefault(emptyList()) }
-            }.awaitAll().toMap()
+            val perTicker = universe.take(MAX_NEWS_TICKERS).map { sym ->
+                async { sym to runCatching { hub.ticker(sym, 6) }.getOrDefault(emptyList()) }
+            }
+            val wide = async { MARKET to runCatching { hub.market(8) }.getOrDefault(emptyList()) }
+            (perTicker.awaitAll() + wide.await()).toMap()
         }
 
         onProgress("Pricing open options")
@@ -196,14 +286,7 @@ class Repository(private val db: TradesDb, val settings: SettingsStore) {
                 digest = result.digest, focus = focus,
             )
         )
-        dao.insertSpend(result.spend.map {
-            SpendEntity(
-                ts = now, purpose = it.purpose, model = it.servedModel,
-                inputTokens = it.usage.inputTokens, outputTokens = it.usage.outputTokens,
-                cacheReadTokens = it.usage.cacheReadTokens, cacheWriteTokens = it.usage.cacheWriteTokens,
-                costUsd = it.cost,
-            )
-        })
+        recordSpend(now, result.spend)
         AppLog.i("Recommendation $id via ${model.id}: ${result.recommendation.summary} (\$${"%.4f".format(result.spend.sumOf { it.cost })})")
         return id
     }

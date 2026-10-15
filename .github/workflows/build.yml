@@ -11,7 +11,7 @@ permissions:
 
 env:
   VERSION_CODE: ${{ github.run_number }}
-  VERSION_NAME: 1.0.${{ github.run_number }}
+  VERSION_NAME: 1.1.${{ github.run_number }}
 
 jobs:
   build:
@@ -25,6 +25,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests, debug and release APKs
         run: ./gradlew :core:test testDebugUnitTest assembleDebug assembleRelease
+      # Informational: shows what each real market and news feed returns today. Never fails the build.
+      - name: Live check of market and news feeds
+        continue-on-error: true
+        env:
+          LIVE_SMOKE: "1"
+        run: ./gradlew :core:test --tests '*LiveSmokeTest*' | grep 'LIVE ' || true
       - name: Name the APKs
         run: |
           cp app/build/outputs/apk/release/app-release.apk "colvin-trades-${VERSION_NAME}.apk"

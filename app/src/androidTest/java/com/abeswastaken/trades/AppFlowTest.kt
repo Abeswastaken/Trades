@@ -28,7 +28,14 @@ class AppFlowTest {
         rule.onNodeWithTag("tab_positions").performClick(); waitForText("Stock")
         rule.onNodeWithTag("tab_ledger").performClick(); waitForText("Fills (")
         rule.onNodeWithTag("tab_watch").performClick(); waitForText("Add ticker")
+        rule.onNodeWithTag("watch_tab_1").performClick(); waitForText("Scan the whole market")
+        rule.onNodeWithTag("market_scan").assertExists()
+        rule.onNodeWithTag("watch_tab_2").performClick(); waitForText("Covered-call finder")
+        rule.onNodeWithTag("screener_run").assertExists()
+        rule.onNodeWithTag("watch_tab_0").performClick(); waitForText("Add ticker")
         rule.onNodeWithTag("tab_settings").performClick(); waitForText("Anthropic Console")
+        waitForText("News sources")
+        rule.onNodeWithTag("news_GOOGLE").assertExists()
         rule.onNodeWithTag("tab_home").performClick(); waitForText("Get a recommendation")
     }
 

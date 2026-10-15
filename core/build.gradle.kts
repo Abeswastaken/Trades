@@ -17,3 +17,11 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
 }
+
+tasks.test {
+    // The live check (LIVE_SMOKE=1) prints what each real feed returned and must never be cached.
+    if (System.getenv("LIVE_SMOKE") != null) {
+        testLogging { showStandardStreams = true }
+        outputs.upToDateWhen { false }
+    }
+}

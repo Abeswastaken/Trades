@@ -24,6 +24,15 @@ data class OptionQuote(
     val volume: Long,
 ) {
     val mid get() = if (bid > 0 && ask > 0) (bid + ask) / 2 else (last ?: bid)
+
+    /** False when there's no live bid (Yahoo shows 0 outside market hours); [premium] is then the last trade. */
+    val liveBid get() = bid > 0
+
+    /** What writing this call should bring in: the bid, or the last trade when the market is closed. */
+    val premium get() = if (bid > 0) bid else (last ?: 0.0)
+
+    /** Yahoo also zeroes open interest overnight, so with no live quote a 0 means "unknown", not "illiquid". */
+    fun meetsOpenInterest(min: Long) = openInterest >= min || (!liveBid && openInterest == 0L)
 }
 
 data class Headline(
@@ -32,6 +41,8 @@ data class Headline(
     val publishedEpochSec: Long?,
     val url: String?,
     val source: String = "",
+    /** -1 (bearish) to +1 (bullish), from sources that score stories. */
+    val sentiment: Double? = null,
 )
 
 interface MarketData {
@@ -40,6 +51,19 @@ interface MarketData {
     /** Calls on [symbol] expiring between [minDte] and [maxDte] days from [today]. */
     suspend fun calls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): List<OptionQuote>
     suspend fun news(symbol: String, limit: Int = 8): List<Headline>
+}
+
+/** Every listed expiry, plus the calls for the first expiry inside the window asked for. */
+data class ChainSnapshot(val expirations: List<LocalDate>, val calls: List<OptionQuote>)
+
+/** Market-wide lists for finding names that aren't on the watchlist yet (Yahoo only). */
+interface Discovery {
+    /** US equities in a price band with enough volume, most traded first. */
+    suspend fun screen(minPrice: Double, maxPrice: Double, minAvgVolume: Long, size: Int): List<Quote>
+    /** Yahoo's saved screens: day_gainers, day_losers, most_actives, ... */
+    suspend fun predefined(list: String, size: Int): List<Quote>
+    suspend fun trending(size: Int): List<String>
+    suspend fun nearestCalls(symbol: String, today: LocalDate, minDte: Int, maxDte: Int): ChainSnapshot
 }
 
 class MarketDataException(message: String, cause: Throwable? = null) : Exception(message, cause)
