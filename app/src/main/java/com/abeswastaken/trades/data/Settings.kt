@@ -29,6 +29,8 @@ data class AppSettings(
     val marketauxKey: String = "",
     val screener: ScreenerRules = ScreenerRules(),
     val risk: RiskLevel = RiskLevel.NORMAL,
+    /** Margin account: negative cash is a loan and spending room is buying power, not cash. */
+    val margin: Boolean = false,
 ) {
     /** Keys for the news sources that need one (Finnhub's doubles as the quote backup). */
     val newsKeys: Map<NewsSourceId, String> get() = mapOf(
@@ -79,6 +81,7 @@ class SettingsStore(context: Context) {
                 minOtmPercent = prefs.getFloat("scrMinOtm", sd.minOtmPercent.toFloat()).toDouble(),
             ),
             risk = RiskLevel.byName(prefs.getString("risk", null)),
+            margin = prefs.getBoolean("margin", false),
         )
     }
 
@@ -87,6 +90,7 @@ class SettingsStore(context: Context) {
         prefs.edit()
             .putString("startingCashText", s.startingCash.toBigDecimal().toPlainString())
             .putString("risk", s.risk.name)
+            .putBoolean("margin", s.margin)
             .putString("defaultModel", s.defaultModel.name)
             .putBoolean("useNewsDigest", s.useNewsDigest)
             .putString("finnhubKey", s.finnhubKey.trim())

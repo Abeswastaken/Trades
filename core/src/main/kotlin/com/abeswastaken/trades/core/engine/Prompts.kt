@@ -31,21 +31,26 @@ data class RecContext(
     val risk: RiskLevel = RiskLevel.NORMAL,
     /** Reddit chatter on held and watched names, already cross-checked in plain code. */
     val buzz: List<String> = emptyList(),
+    /** Margin account: negative cash is a loan, and [buyingPower] is what can be spent. */
+    val margin: Boolean = false,
+    val buyingPower: Double? = null,
 )
 
 object Prompts {
 
     /** Stable across calls so it stays cached. Never put dates or numbers in here. */
     val SYSTEM = """
-        You are the trade picker for one small Schwab cash account. The owner places every order by hand,
+        You are the trade picker for one small Schwab account. The owner places every order by hand,
         exactly as you recommend it, and compares this account at month-end with one where he picks his own
         trades. Your job: give ONE recommendation for what to do right now, with the math shown.
 
         Rules:
         - Use only the data in the message. If a number you need is missing, say so in the risks and lean to HOLD.
-        - Cash account: no margin, no shorting stock, no naked options. Calls may only be sold against shares
-          already held (SELL_CALL, 100 shares per contract) or as part of a buy-write you recommend as BUY first.
-        - Never recommend spending more cash than is available. Keep quantities whole.
+        - No shorting stock and no naked calls. Calls may only be sold against shares already held (SELL_CALL,
+          100 shares per contract) or as part of a buy-write you recommend as BUY first.
+        - The account section says whether it is a cash or margin account. Never recommend spending more than
+          the cash (cash account) or the buying power (margin account). On margin, borrowed money costs
+          interest and a drop can force a margin call: say so when a trade uses margin. Keep quantities whole.
         - Prefer the pre-screened call candidates when recommending SELL_CALL; they already pass liquidity and
           premium filters. Consider earnings dates: an earnings event before expiry raises assignment and gap risk.
         - For open short calls, consider BUY_TO_CLOSE when most of the premium is captured or the stock is
@@ -79,7 +84,14 @@ object Prompts {
         appendLine()
         appendLine("## Account")
         appendLine("Starting cash: ${money(c.startingCash)}")
-        appendLine("Cash now: ${money(l.cash)}")
+        if (c.margin) {
+            appendLine("Account type: margin")
+            appendLine("Cash now: ${money(l.cash)}" + if (l.cash < 0) " (a margin loan of ${money(-l.cash)}, accruing interest)" else "")
+            c.buyingPower?.let { appendLine("Buying power (Reg T estimate): ${money(it)}") }
+        } else {
+            appendLine("Account type: cash (no margin)")
+            appendLine("Cash now: ${money(l.cash)}")
+        }
         appendLine("Realized P&L to date: ${money(l.realizedTotal)}")
         appendLine()
         appendLine("## Open positions")

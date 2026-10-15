@@ -125,7 +125,7 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
                     Text("${signedMoney(change)} (${pct(change / settings.startingCash * 100)}) since start", color = pnlColor(change))
                 }
                 Spacer(Modifier.height(8.dp))
-                KeyValue("Cash", money(ledger.cash))
+                CashRows(ledger, settings.margin, quotes.mapValues { it.value.price })
                 KeyValue("Realized this month", signedMoney(monthRealized), pnlColor(monthRealized))
                 KeyValue("Claude spend this month", money(spend))
                 KeyValue("Risk setting", settings.risk.label)

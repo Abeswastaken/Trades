@@ -263,7 +263,7 @@ fun ScreenerTab(vm: AppViewModel, openRec: (Long) -> Unit) {
                 Spacer(Modifier.height(8.dp))
             }
             items(res.hits, key = { "hit_" + it.quote.symbol }) { h ->
-                HitCard(h, cash = ledger.cash, watched = h.quote.symbol in watch, onWatch = { vm.addWatch(h.quote.symbol) }) {
+                HitCard(h, cash = ledger.buyingPower(settings.margin, mapOf(h.quote.symbol to h.quote.price)), watched = h.quote.symbol in watch, onWatch = { vm.addWatch(h.quote.symbol) }) {
                     val o = h.option
                     vm.askAbout(
                         h.quote.symbol,

@@ -61,6 +61,7 @@ class AppFlowTest {
         rule.onNodeWithTag("news_GOOGLE").assertExists()
         rule.onNodeWithTag("news_REDDIT").assertExists()
         rule.onNodeWithTag("risk_HIGH").assertExists()
+        rule.onNodeWithTag("margin_switch").performScrollTo().assertExists()
         rule.onNodeWithTag("tab_home").performClick(); waitForText("Needs you")
         rule.onNodeWithTag("home_alerts").assertExists()
     }

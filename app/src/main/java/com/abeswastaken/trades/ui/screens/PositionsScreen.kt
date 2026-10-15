@@ -64,6 +64,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     val error by vm.quotesError.collectAsState()
     val marks by vm.optionMarks.collectAsState()
     val suggesting by vm.suggesting.collectAsState()
+    val settings by vm.settings.collectAsState()
     var sheet by remember { mutableStateOf<Position?>(null) }
     var confirm by remember { mutableStateOf<Pair<Event, Position>?>(null) }
     var rolling by remember { mutableStateOf<Position?>(null) }
@@ -94,7 +95,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
         LazyColumn(Modifier.padding(horizontal = 16.dp).testTag("positions_list")) {
             item {
                 InfoCard {
-                    KeyValue("Cash", money(ledger.cash))
+                    CashRows(ledger, settings.margin, quotes.mapValues { it.value.price })
                     KeyValue("Unrealized on stock", signedMoney(unrealized), pnlColor(unrealized))
                     if (marks.isNotEmpty()) KeyValue("Unrealized on options", signedMoney(optionUnrealized), pnlColor(optionUnrealized))
                     KeyValue("Realized all time", signedMoney(ledger.realizedTotal), pnlColor(ledger.realizedTotal))
