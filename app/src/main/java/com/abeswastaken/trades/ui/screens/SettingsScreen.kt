@@ -147,6 +147,16 @@ fun SettingsScreen(vm: AppViewModel) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 )
                 Muted("The seed money in the Claude account. Cash is this plus or minus every fill.")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Margin account")
+                        Muted("Cash can go below zero (shown as a margin loan), and scans and recommendations use an estimated buying power instead of cash. Still no shorting stock or naked calls.")
+                    }
+                    Switch(
+                        checked = s.margin, onCheckedChange = { v -> vm.updateSettings { copy(margin = v) } },
+                        modifier = Modifier.testTag("margin_switch"),
+                    )
+                }
                 Button(
                     onClick = { vm.updateSettings { copy(startingCash = cash.toDoubleOrNull() ?: 0.0) }; vm.toast.value = "Saved" },
                     modifier = Modifier.padding(top = 8.dp),

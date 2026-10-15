@@ -222,13 +222,14 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         onProgress("Finding movers, most active and trending stocks")
         val buzz = runCatching { buzz() }.getOrNull()?.checks.orEmpty()
         val extra = buzz.take(15).associate { it.ticker to if (it.longShot) "reddit long shot" else "reddit buzz" }
-        val candidates = MarketCandidates.gather(yahoo, market(), s.rules, ledger.cash, exclude, extra = extra) { AppLog.i(it) }
+        val spendable = ledger.buyingPower(s.margin)
+        val candidates = MarketCandidates.gather(yahoo, market(), s.rules, spendable, exclude, extra = extra) { AppLog.i(it) }
         val names = candidates.map { it.quote.symbol }.toSet()
         onProgress("Reading market news from ${s.newsSources.size} sources")
         val headlines = runCatching { marketNews() }.getOrDefault(emptyList())
         onProgress("Asking ${model.label} to pick from ${candidates.size} stocks")
         val result = MarketScanner(AnthropicLlm(key, onDowngrade = { AppLog.i(it) }))
-            .scan(model, MarketScanContext(today(), ledger.cash, candidates, headlines, focus, s.risk, buzz.filter { it.ticker in names }.map { it.promptLine() }))
+            .scan(model, MarketScanContext(today(), spendable, candidates, headlines, focus, s.risk, buzz.filter { it.ticker in names }.map { it.promptLine() }, s.margin))
         if (result.dropped.isNotEmpty()) AppLog.i("Market scan dropped picks not in the list: ${result.dropped}")
         val now = System.currentTimeMillis()
         recordSpend(now, result.spend)
@@ -342,7 +343,7 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
     suspend fun ticket(ticker: String): com.abeswastaken.trades.core.engine.LongShotTicket? {
         val q = market().quotes(listOf(ticker))[ticker] ?: throw LlmException("No quote for $ticker")
         val snap = yahoo.nearestCalls(ticker, today(), 1, 10)
-        return BuzzScreen.ticket(q.price, snap.calls, ledger().cash)
+        return BuzzScreen.ticket(q.price, snap.calls, ledger().buyingPower(settings.state.value.margin))
     }
 
     /** The next expiry's call to roll a short call into. */
@@ -424,8 +425,9 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
             AppLog.e("Quotes failed", it); emptyMap()
         }
 
+        val spendable = ledger.buyingPower(s.margin, quotes.mapValues { it.value.price })
         onProgress("Scanning option chains")
-        val scan: ScanResult = CoveredCallScanner.scan(market, universe, ledger, today, s.rules, quotes)
+        val scan: ScanResult = CoveredCallScanner.scan(market, universe, ledger, today, s.rules, quotes, spendable)
         scan.errors.forEach { (sym, e) -> AppLog.i("Scan $sym: $e") }
 
         onProgress("Reading the news")
@@ -452,7 +454,7 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         val ctx = RecContext(
             today = today, ledger = ledger, startingCash = s.startingCash, quotes = quotes,
             candidates = scan.candidates, newsDigest = null, history = history, focus = focus,
-            watchlist = watch, optionMarks = marks, risk = s.risk,
+            watchlist = watch, optionMarks = marks, risk = s.risk, margin = s.margin, buyingPower = spendable,
             buzz = cachedBuzz()?.checks.orEmpty().filter { it.ticker in universe }.map { it.promptLine() },
         )
         onProgress(if (s.useNewsDigest) "Asking Claude (news digest, then ${model.label})" else "Asking ${model.label}")
@@ -481,7 +483,7 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         root.put("exportedAt", Instant.now().toString())
         val s = settings.state.value
         root.put("settings", JSONObject().put("startingCash", s.startingCash).put("defaultModel", s.defaultModel.name)
-            .put("risk", s.risk.name).put("newsSources", JSONArray(s.newsSources.map { it.name })))
+            .put("risk", s.risk.name).put("margin", s.margin).put("newsSources", JSONArray(s.newsSources.map { it.name })))
         root.put("fills", JSONArray(dao.allFills().map { f ->
             JSONObject().put("id", f.id).put("epochDay", f.epochDay).put("ticker", f.ticker).put("type", f.type)
                 .put("strike", f.strike ?: JSONObject.NULL).put("expiryEpochDay", f.expiryEpochDay ?: JSONObject.NULL)
@@ -552,6 +554,7 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
                     startingCash = st.optDouble("startingCash", startingCash),
                     defaultModel = ClaudeModel.byName(st.optString("defaultModel", defaultModel.name)),
                     risk = com.abeswastaken.trades.core.engine.RiskLevel.byName(st.optString("risk", risk.name)),
+                    margin = st.optBoolean("margin", margin),
                     newsSources = st.optJSONArray("newsSources")?.let { a -> NewsSourceId.parse((0 until a.length()).map(a::getString)) } ?: newsSources,
                 )
             }

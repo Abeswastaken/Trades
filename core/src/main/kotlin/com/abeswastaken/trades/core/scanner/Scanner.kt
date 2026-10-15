@@ -97,6 +97,7 @@ object CoveredCallScanner {
         ledger: LedgerState,
         today: LocalDate,
         rules: ScanRules,
+        spendable: Double = ledger.cash,
     ): List<CallCandidate> {
         val out = mutableListOf<CallCandidate>()
         for ((sym, chain) in chains) {
@@ -106,7 +107,7 @@ object CoveredCallScanner {
                 coverable > 0 -> CandidateKind.COVERED_CALL to coverable
                 else -> {
                     val per = q.price * 100
-                    val affordable = if (per > 0) (ledger.cash / per).toInt() else 0
+                    val affordable = if (per > 0) (spendable / per).toInt() else 0
                     if (affordable < 1) continue
                     CandidateKind.BUY_WRITE to affordable
                 }
@@ -129,6 +130,7 @@ object CoveredCallScanner {
         today: LocalDate,
         rules: ScanRules,
         quotes: Map<String, Quote>? = null,
+        spendable: Double = ledger.cash,
     ): ScanResult {
         val q = quotes ?: market.quotes(universe)
         val rejected = mutableMapOf<String, String>()
@@ -140,13 +142,13 @@ object CoveredCallScanner {
             val held = ledger.sharesHeld(sym) >= 100
             val why = rejectUnderlying(quote, rules, held)
             if (why != null) { rejected[sym] = why; continue }
-            if (!held && quote.price * 100 > ledger.cash) { rejected[sym] = "100 shares cost more than cash"; continue }
+            if (!held && quote.price * 100 > spendable) { rejected[sym] = "100 shares cost more than you can spend"; continue }
             try {
                 chains[sym] = market.calls(sym, today, rules.minDte, rules.maxDte)
             } catch (e: Exception) {
                 errors[sym] = e.message ?: e.javaClass.simpleName
             }
         }
-        return ScanResult(rank(q, chains, ledger, today, rules), rejected, errors)
+        return ScanResult(rank(q, chains, ledger, today, rules, spendable), rejected, errors)
     }
 }

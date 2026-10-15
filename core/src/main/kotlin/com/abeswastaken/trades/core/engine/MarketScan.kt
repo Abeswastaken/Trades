@@ -25,6 +25,8 @@ data class MarketScanContext(
     val risk: RiskLevel = RiskLevel.NORMAL,
     /** Plain-code cross-checks of Reddit buzz on the candidates. */
     val buzz: List<String> = emptyList(),
+    /** True when [cash] is a margin account's buying power rather than cash. */
+    val margin: Boolean = false,
 )
 
 @Serializable
@@ -74,7 +76,7 @@ class MarketScanner(private val llm: LlmClient) {
         private val json = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true }
 
         val SYSTEM = """
-            You scan the US market for the owner of one small Schwab cash account. He sells covered calls (buys
+            You scan the US market for the owner of one small Schwab account. He sells covered calls (buys
             100 shares and writes calls against them) and buys stock he would be happy to hold. He uses your
             scan to build his watchlist; a separate step later decides the exact trade.
 
@@ -93,7 +95,8 @@ class MarketScanner(private val llm: LlmClient) {
 
         fun request(c: MarketScanContext): String = buildString {
             appendLine("Today: ${c.today} (${c.today.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }})")
-            appendLine("Cash available: ${money(c.cash)} (100 shares must cost less than this for COVERED_CALL)")
+            if (c.margin) appendLine("Buying power (margin account, Reg T estimate): ${money(c.cash)} (100 shares must cost less than this for COVERED_CALL; borrowing costs interest)")
+            else appendLine("Cash available: ${money(c.cash)} (100 shares must cost less than this for COVERED_CALL)")
             appendLine()
             appendLine("## Market headlines")
             if (c.headlines.isEmpty()) appendLine("None available.")

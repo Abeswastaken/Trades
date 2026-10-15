@@ -11,6 +11,7 @@ Personal trade decision-support app for Jake. Read `README.md` for features. The
 - **The ledger is the spine.** `core/.../ledger/Ledger.kt` replays all fills (FIFO) into lots, closed lots, cash and positions. Never regress it; run `./gradlew -p core test` before any ledger change.
 - **Pre-filter in plain code, then Claude ranks.** The scanner rejects by price/volume/DTE/OI/premium before any tokens are spent. The market scan does the same: `MarketCandidates` filters Yahoo's lists, and Claude may only pick from them (other tickers are dropped). The covered-call screener uses no Claude at all.
 - Reddit: `ApeWisdom` gives mention counts; `BuzzScreen` (core/engine/Buzz.kt) cross-checks them against quotes, volume and non-Reddit news in plain code and flags long shots. Claude (`BuzzVerifier`) is opt-in. Reddit headlines carry "Reddit" in their source and are labelled unverified in prompts.
+- Margin (Settings toggle, off by default): `LedgerState.buyingPower` gives a Reg T estimate that replaces cash for sizing in scans, recommendations and tickets; the account type goes in the request, not the cached system prompt.
 - `RiskLevel` (Settings) is appended to the recommendation and market-scan requests, not the cached system prompt.
 - News goes through `NewsHub` (core/market/News.kt): one provider per source, toggled in Settings; keyed ones are skipped without a key. Add a source there, not in `MarketData`.
 - **Sonnet by default** for recommendations; Haiku pre-digests news; Opus is per-call opt-in. Model IDs and prices live in `core/.../engine/Models.kt`.

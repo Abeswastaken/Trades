@@ -219,6 +219,28 @@ class V12Test {
         assertTrue(text.contains("- GME: #1 on Reddit"))
     }
 
+    @Test fun `margin account turns negative cash into a loan and spends buying power`() {
+        // 1000 cash, then 150 shares at 10: cash -500, 1500 of stock.
+        val l = Ledger.compute(listOf(Fill(1, LocalDate.of(2026, 10, 1), Instrument.stock("F"), Side.BUY, 150.0, 10.0)), 1000.0)
+        assertEquals(-500.0, l.cash, 1e-9)
+        assertEquals(-500.0, l.buyingPower(false), 1e-9)
+        // Reg T: equity 1000 supports 2000 of stock; 1500 held at cost leaves 500.
+        assertEquals(500.0, l.buyingPower(true), 1e-9)
+        // Marked at 12: equity 1300 supports 2600; 1800 held leaves 800.
+        assertEquals(800.0, l.buyingPower(true, mapOf("F" to 12.0)), 1e-9)
+
+        val ctx = com.abeswastaken.trades.core.engine.RecContext(
+            today = LocalDate.of(2026, 10, 15), ledger = l, startingCash = 1000.0,
+            quotes = emptyMap(), candidates = emptyList(), newsDigest = null, history = emptyList(), focus = null,
+            watchlist = emptyList(), margin = true, buyingPower = 500.0,
+        )
+        val text = Prompts.recommendRequest(ctx)
+        assertTrue(text.contains("Account type: margin"))
+        assertTrue(text.contains("margin loan of \$500.00"))
+        assertTrue(text.contains("Buying power (Reg T estimate): \$500.00"))
+        assertTrue(Prompts.recommendRequest(ctx.copy(margin = false)).contains("Account type: cash"))
+    }
+
     @Test fun `long-shot ticket is the nearest OTM call with an offer`() {
         val exp = LocalDate.of(2026, 10, 23)
         fun c(k: Double, bid: Double, ask: Double) = com.abeswastaken.trades.core.market.OptionQuote("GME", k, exp, bid, ask, null, 10, 10)

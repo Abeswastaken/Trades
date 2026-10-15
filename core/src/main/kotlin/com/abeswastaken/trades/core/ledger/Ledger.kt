@@ -56,6 +56,18 @@ data class LedgerState(
     val positions: List<Position>,
 ) {
     val realizedTotal get() = closedLots.sumOf { it.realized }
+
+    /**
+     * What can be spent on a new trade. A cash account has its cash. A margin account gets a Reg T
+     * estimate (50% initial requirement): twice the equity, less the stock already held, marked at
+     * [prices] or at cost. Schwab's own buying-power figure is the real one.
+     */
+    fun buyingPower(margin: Boolean, prices: Map<String, Double> = emptyMap()): Double {
+        if (!margin) return cash
+        val stock = positions.filter { it.instrument.type == AssetType.STOCK }
+            .sumOf { p -> (prices[p.instrument.ticker] ?: p.avgCost) * p.quantity }
+        return maxOf(0.0, 2 * cash + stock)
+    }
     fun realizedBetween(from: LocalDate, to: LocalDate) =
         closedLots.filter { !it.closeDate.isBefore(from) && !it.closeDate.isAfter(to) }.sumOf { it.realized }
 

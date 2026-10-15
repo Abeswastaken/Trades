@@ -57,6 +57,20 @@ fun KeyValue(label: String, value: String, valueColor: Color = Color.Unspecified
     }
 }
 
+/**
+ * Cash, or on a margin account the loan and an estimated buying power. Negative cash on a cash
+ * account usually means a deposit or margin wasn't recorded, so it says where to fix that.
+ */
+@Composable
+fun CashRows(ledger: com.abeswastaken.trades.core.ledger.LedgerState, margin: Boolean, prices: Map<String, Double>) {
+    when {
+        margin && ledger.cash < 0 -> KeyValue("Margin loan", money(-ledger.cash))
+        else -> KeyValue("Cash", money(ledger.cash), if (ledger.cash < 0) MaterialTheme.colorScheme.error else Color.Unspecified)
+    }
+    if (margin) KeyValue("Buying power (est.)", money(ledger.buyingPower(true, prices)))
+    else if (ledger.cash < 0) Muted("Cash is below zero. If you trade on margin, turn on Margin account in Settings; if you added money, raise starting cash.")
+}
+
 @Composable
 fun Muted(text: String, modifier: Modifier = Modifier) {
     Text(text, modifier = modifier, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
