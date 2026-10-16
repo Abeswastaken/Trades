@@ -53,6 +53,16 @@ import com.abeswastaken.trades.core.export.ImportPreview
 import com.abeswastaken.trades.core.export.SchwabImport
 import com.abeswastaken.trades.core.market.ApeWisdom
 import com.abeswastaken.trades.core.market.RedditNews
+import com.abeswastaken.trades.core.engine.AlertContext
+import com.abeswastaken.trades.core.engine.AlertEngine
+import com.abeswastaken.trades.core.engine.AlertEvent
+import com.abeswastaken.trades.core.engine.AlertKind
+import com.abeswastaken.trades.core.engine.AlertLevel
+import com.abeswastaken.trades.core.engine.CheckKind
+import com.abeswastaken.trades.core.engine.MoveContext
+import com.abeswastaken.trades.core.engine.MoveExplainer
+import com.abeswastaken.trades.core.engine.OpenBriefContext
+import com.abeswastaken.trades.core.engine.OpenBriefer
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -69,6 +79,8 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
     val recs = dao.recs()
     val watchlist = dao.watchlist()
     val spend = dao.spend()
+    val alertStore = AlertStore(filesDir)
+    private val edgar = com.abeswastaken.trades.core.market.Edgar(http)
 
     fun market(): MarketData {
         val fh = settings.state.value.finnhubKey.takeIf { it.isNotBlank() }?.let { FinnhubMarketData(it, http) }
@@ -303,7 +315,11 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         val news = coroutineScope {
             worth.map { t -> async { t to runCatching { hub.ticker(t, 4) }.getOrDefault(emptyList()) } }.awaitAll().toMap()
         }
-        val checks = BuzzScreen.rank(items.map { BuzzScreen.check(it, quotes[it.ticker], news[it.ticker].orEmpty(), now) })
+        // Hype check: the SEC record (insider buys, offerings) on the names worth checking.
+        val sec = runCatching { edgarFor(worth.take(5).toList()) }.getOrDefault(emptyMap())
+        val checks = BuzzScreen.rank(items.map {
+            BuzzScreen.check(it, quotes[it.ticker], news[it.ticker].orEmpty(), now).withFilings(sec[it.ticker]?.lines().orEmpty())
+        })
         AppLog.i("Buzz: ${checks.size} names, long shots ${checks.filter { it.longShot }.map { it.ticker }}")
         return Buzz(System.currentTimeMillis(), checks, "ApeWisdom").also { buzzCache = it }
     }
@@ -381,6 +397,115 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         briefFile.writeText(JSONObject().put("at", now).put("text", text).put("costUsd", spend.cost).put("tickers", tickers.joinToString(",")).toString())
         return b
     }
+
+    // ---- Alerts --------------------------------------------------------------------------------
+
+    /** SEC lines per ticker (insider buys, offerings), skipping any that fail. */
+    private val edgarCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, com.abeswastaken.trades.core.market.EdgarSummary>>()
+
+    /** SEC lines per ticker (insider buys, offerings), cached for two hours, skipping any that fail. */
+    private suspend fun edgarFor(tickers: List<String>): Map<String, com.abeswastaken.trades.core.market.EdgarSummary> =
+        tickers.mapNotNull { t ->
+            edgarCache[t]?.takeIf { System.currentTimeMillis() - it.first < 2 * 3600_000 }?.let { return@mapNotNull t to it.second }
+            runCatching { edgar.summary(t, today()) }.onFailure { AppLog.i("EDGAR $t failed: ${it.message}") }.getOrNull()
+                ?.also { edgarCache[t] = System.currentTimeMillis() to it }?.let { t to it }
+        }.toMap()
+
+    /**
+     * One background check: plain-code rules on quotes, options, dividends, Reddit and the SEC, then at the
+     * open a Claude brief. Returns the alerts that are new (already-seen keys are dropped).
+     */
+    suspend fun runAlertCheck(kind: CheckKind): List<InboxItem> {
+        val s = settings.state.value
+        val r = s.alerts
+        val now = java.time.ZonedDateTime.now()
+        val today = today()
+        val ledger = ledger()
+        val watch = dao.allWatch().map { it.ticker }
+        val tickers = (ledger.positions.map { it.instrument.ticker } + watch).distinct()
+        val market = market()
+        val quotes = runCatching { market.quotes(tickers) }.getOrElse { AppLog.e("Alert quotes failed", it); emptyMap() }
+        val optionQuotes = runCatching { OptionMarks.fetch(market, ledger.positions.filter { it.quantity < 0 }, today) { AppLog.i(it) } }
+            .getOrDefault(emptyMap()).mapValues { it.value.quote }
+        val shortCallTickers = ledger.positions.filter { it.instrument.type == AssetType.CALL && it.quantity < 0 }.map { it.instrument.ticker }.distinct()
+        val dividends = if (!r.exDividend) emptyMap() else shortCallTickers.mapNotNull { t ->
+            runCatching { yahoo.dividend(t) }.onFailure { AppLog.i("Dividend $t failed: ${it.message}") }.getOrNull()?.let { t to it }
+        }.toMap()
+        val buzzChecks = if (r.longShots || (kind == CheckKind.OPEN && r.openCheck)) runCatching { buzz().checks }.getOrDefault(emptyList()) else emptyList()
+        // The SEC record moves slowly: read it at the open, before the close and on demand, not every 15 minutes.
+        val sec = if (r.insider && kind != CheckKind.INTRADAY) edgarFor(tickers.take(10)) else emptyMap()
+        val chains = if (!r.unusual) emptyMap() else tickers.take(8).mapNotNull { t ->
+            runCatching { yahoo.nearestCalls(t, today, 0, 14).calls }.getOrNull()?.let { t to it }
+        }.toMap()
+        val events = AlertEngine.evaluate(
+            AlertContext(now, kind, r, ledger, quotes, watch, optionQuotes, dividends, if (r.longShots) buzzChecks else emptyList(), sec, chains)
+        ).toMutableList()
+
+        var note = ""
+        if (kind == CheckKind.OPEN && r.openCheck) {
+            val key = settings.apiKey()
+            if (key == null) note = " Open brief skipped: no API key."
+            else try {
+                val hub = newsHub()
+                val headlines = coroutineScope {
+                    val per = tickers.take(6).map { t -> async { runCatching { hub.ticker(t, 3) }.getOrDefault(emptyList()) } }
+                    val wide = async { runCatching { hub.market(15) }.getOrDefault(emptyList()) }
+                    per.awaitAll().flatten() + wide.await()
+                }
+                val movers = listOf("day_gainers", "day_losers").flatMap { l -> runCatching { yahoo.predefined(l, 5) }.getOrDefault(emptyList()) }
+                val ctx = OpenBriefContext(
+                    today, ledger, quotes, watch, events, movers, headlines,
+                    buzzChecks.take(5).map { it.promptLine() }, sec.flatMap { (t, x) -> x.lines().map { "$t: $it" } }, s.risk, s.margin,
+                )
+                val (reply, spend) = OpenBriefer(AnthropicLlm(key, onDowngrade = { AppLog.i(it) })).brief(r.openModel, ctx)
+                recordSpend(System.currentTimeMillis(), spend)
+                events.add(0, AlertEvent(
+                    "brief:$today", AlertKind.BRIEF, if (reply.tone == "ACT") AlertLevel.CRITICAL else AlertLevel.NOTICE,
+                    reply.title, reply.bullets.joinToString("\n") { "• $it" },
+                ))
+                note = " Brief ${money(spend.sumOf { it.cost })}."
+            } catch (e: Exception) {
+                AppLog.e("Open brief failed", e)
+                note = " Open brief failed: ${e.message}"
+            }
+        }
+        val fresh = alertStore.add(events, kind)
+        alertStore.setStatus { copy(lastAt = System.currentTimeMillis(), lastCheck = kind.label, lastResult = "${fresh.size} new, ${events.size} flagged.$note") }
+        AppLog.i("${kind.label}: ${events.size} flagged, ${fresh.size} new.$note")
+        return fresh
+    }
+
+    /** A sample alert so notifications can be checked without waiting for the market. */
+    fun testAlert(): InboxItem = alertStore.add(
+        listOf(AlertEvent("test:${System.currentTimeMillis()}", AlertKind.TEST, AlertLevel.CRITICAL, "Test alert", "Notifications work. Real alerts look like this.")),
+        CheckKind.MANUAL,
+    ).first()
+
+    /** Why is [ticker] moving? Claude explains it and adds a lesson to the notebook. */
+    suspend fun explainMove(ticker: String): LessonEntry {
+        val s = settings.state.value
+        val key = settings.apiKey() ?: throw LlmException("Add your Anthropic API key in Settings first.")
+        val t = ticker.uppercase()
+        val q = runCatching { market().quotes(listOf(t))[t] }.getOrNull()
+        val news = runCatching { newsHub().ticker(t, 10) }.getOrDefault(emptyList())
+        val ledger = ledger()
+        val mine = ledger.positions.filter { it.instrument.ticker == t }.map { p ->
+            if (p.instrument.isOption) "${if (p.quantity < 0) "Short" else "Long"} ${qtyText(abs(p.quantity))} ${p.instrument.label} at ${"%.2f".format(p.avgCost)}"
+            else "${qtyText(p.quantity)} shares at ${"%.2f".format(p.avgCost)} cost"
+        }
+        val filings = runCatching { edgarFor(listOf(t))[t]?.lines().orEmpty() }.getOrDefault(emptyList())
+        val buzzLine = cachedBuzz()?.checks?.firstOrNull { it.ticker == t }?.promptLine()
+        val (x, spend) = MoveExplainer(AnthropicLlm(key, onDowngrade = { AppLog.i(it) }))
+            .explain(s.defaultModel, MoveContext(t, q, news, mine, filings, buzzLine, alertStore.lessons.value.map { it.title }))
+        val now = System.currentTimeMillis()
+        recordSpend(now, spend)
+        val entry = LessonEntry(now, t, x.why, x.driver, x.confidence, x.lesson.title, x.lesson.text, x.watchFor, spend.sumOf { it.cost })
+        alertStore.addLesson(entry)
+        AppLog.i("Why $t: ${x.driver}/${x.confidence}, lesson \"${x.lesson.title}\"")
+        return entry
+    }
+
+    private fun money(v: Double) = "\$" + "%.3f".format(java.util.Locale.US, v)
 
     // ---- Schwab import -------------------------------------------------------------------------
 
@@ -483,7 +608,9 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
         root.put("exportedAt", Instant.now().toString())
         val s = settings.state.value
         root.put("settings", JSONObject().put("startingCash", s.startingCash).put("defaultModel", s.defaultModel.name)
-            .put("risk", s.risk.name).put("margin", s.margin).put("newsSources", JSONArray(s.newsSources.map { it.name })))
+            .put("risk", s.risk.name).put("margin", s.margin).put("newsSources", JSONArray(s.newsSources.map { it.name }))
+            .put("alerts", SettingsStore.alertsToJson(s.alerts)))
+        root.put("lessons", JSONArray(alertStore.lessons.value.map { AlertStore.lessonJson(it) }))
         root.put("fills", JSONArray(dao.allFills().map { f ->
             JSONObject().put("id", f.id).put("epochDay", f.epochDay).put("ticker", f.ticker).put("type", f.type)
                 .put("strike", f.strike ?: JSONObject.NULL).put("expiryEpochDay", f.expiryEpochDay ?: JSONObject.NULL)
@@ -555,10 +682,12 @@ class Repository(private val db: TradesDb, val settings: SettingsStore, private 
                     defaultModel = ClaudeModel.byName(st.optString("defaultModel", defaultModel.name)),
                     risk = com.abeswastaken.trades.core.engine.RiskLevel.byName(st.optString("risk", risk.name)),
                     margin = st.optBoolean("margin", margin),
+                    alerts = st.optJSONObject("alerts")?.let { SettingsStore.alertsFromJson(it, alerts) } ?: alerts,
                     newsSources = st.optJSONArray("newsSources")?.let { a -> NewsSourceId.parse((0 until a.length()).map(a::getString)) } ?: newsSources,
                 )
             }
         }
+        root.optJSONArray("lessons")?.let { a -> alertStore.restoreLessons((0 until a.length()).mapNotNull { AlertStore.lessonFrom(a.getJSONObject(it)) }) }
         AppLog.i("Restored backup: ${fills.size} fills, ${recs.size} recommendations")
     }
 

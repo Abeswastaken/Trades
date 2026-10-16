@@ -57,7 +57,7 @@ private enum class Event { EXPIRE, ASSIGN }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
+fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit, openNotebook: () -> Unit = {}) {
     val ledger by vm.ledger.collectAsState()
     val quotes by vm.quotes.collectAsState()
     val loading by vm.quotesLoading.collectAsState()
@@ -68,6 +68,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
     var sheet by remember { mutableStateOf<Position?>(null) }
     var confirm by remember { mutableStateOf<Pair<Event, Position>?>(null) }
     var rolling by remember { mutableStateOf<Position?>(null) }
+    var why by remember { mutableStateOf<String?>(null) }
 
     // Mark to market every time the screen opens.
     LaunchedEffect(Unit) { vm.refreshQuotes() }
@@ -111,6 +112,7 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
                     p, quotes[p.instrument.ticker], coverable, busy = suggesting == p.instrument.ticker,
                     onCoveredCall = { vm.coveredCallDraft(p, coverable); openLog() },
                     onSell = { vm.startDraft(FillDraft.close(p, quotes[p.instrument.ticker]?.price)); openLog() },
+                    onWhy = { why = p.instrument.ticker },
                 )
             }
 
@@ -120,9 +122,12 @@ fun PositionsScreen(vm: AppViewModel, openLog: () -> Unit) {
             items(options, key = { it.instrument.label }) { p ->
                 OptionRow(p, quotes[p.instrument.ticker], marks[p.instrument], onClick = { sheet = p })
             }
+            item { TextButton(onClick = openNotebook) { Text("Open your notebook of lessons") } }
             item { Spacer(Modifier.height(24.dp)) }
         }
     }
+
+    why?.let { WhyDialog(vm, it) { why = null } }
 
     sheet?.let { p ->
         val short = p.quantity < 0
@@ -262,7 +267,7 @@ private fun RollField(value: String, onChange: (String) -> Unit, label: String, 
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StockRow(p: Position, q: Quote?, coverable: Int, busy: Boolean, onCoveredCall: () -> Unit, onSell: () -> Unit) {
+private fun StockRow(p: Position, q: Quote?, coverable: Int, busy: Boolean, onCoveredCall: () -> Unit, onSell: () -> Unit, onWhy: () -> Unit) {
     InfoCard(Modifier.padding(bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(p.instrument.ticker, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
@@ -281,6 +286,7 @@ private fun StockRow(p: Position, q: Quote?, coverable: Int, busy: Boolean, onCo
                 Text(if (busy) "Finding a strike…" else "Sell $coverable covered call${if (coverable > 1) "s" else ""}")
             }
             TextButton(onClick = onSell) { Text("Sell shares") }
+            TextButton(onClick = onWhy, modifier = Modifier.testTag("why_${p.instrument.ticker}")) { Text("Why is it moving?") }
         }
     }
 }
