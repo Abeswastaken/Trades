@@ -49,7 +49,8 @@ data class EdgarSummary(val ticker: String, val filings: List<Filing>, val insid
  */
 class Edgar(
     baseClient: OkHttpClient = OkHttpClient(),
-    private val userAgent: String = "ColvinTrades/1.2 (personal app; https://github.com/Abeswastaken/Trades)",
+    // The SEC requires "Name contact-email"; this alias is the one Jake set up for it (2026-10-16).
+    private val userAgent: String = "ColvinTrades sec-oct2026.cascade969@simplelogin.com",
     private val www: String = "https://www.sec.gov",
     private val data: String = "https://data.sec.gov",
 ) {
