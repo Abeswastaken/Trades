@@ -13,10 +13,17 @@ data class Quote(
     val source: String = "",
     /** Shares traded so far today. */
     val volume: Long? = null,
+    val previousClose: Double? = null,
+    val open: Double? = null,
+    val high52: Double? = null,
+    val low52: Double? = null,
 ) {
     /** Today's volume against the 3-month average, when both are known. */
     val volumeRatio: Double? get() = volume?.let { v -> avgVolume?.takeIf { it > 0 }?.let { v.toDouble() / it } }
 }
+
+/** Next ex-dividend date and the per-payment amount (annual rate / 4 when only the rate is known). */
+data class Dividend(val symbol: String, val exDate: LocalDate?, val amount: Double?)
 
 data class OptionQuote(
     val underlying: String,
