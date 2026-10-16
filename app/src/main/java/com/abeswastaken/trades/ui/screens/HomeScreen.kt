@@ -113,13 +113,14 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
     val checks = (buzz as? Work.Done)?.value?.checks.orEmpty()
     val notes = (report as? Work.Done)?.value?.report?.notes.orEmpty().associateBy { it.ticker.uppercase() }
 
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp).testTag("home_list")) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)) {
-                Text("Colvin Trades", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            // The clock gets its own line: after hours its text is long enough to squeeze the title on a narrow phone.
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp)) {
+                Text("Colvin Trades", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f))
                 InboxBell(vm, openInbox)
-                MarketClockPill()
             }
+            Row(Modifier.padding(top = 4.dp, bottom = 12.dp)) { MarketClockPill() }
             InfoCard {
                 Text("Account value (est.)", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(money(equity), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)

@@ -36,6 +36,6 @@ Terse and direct. Has accepted that LLM picks are "educated friend", not edge; d
 - Parked: "Brief me on X", widget.
 
 ## Alerts
-- `core/.../engine/Alerts.kt`: `AlertEngine` (plain-code rules, pure), `AlertSchedule` (9:31 ET, every 15/30 min, close minus 30, trading days only), `OpenBriefer` (the one Claude call at the open) and `MoveExplainer` ("why is it moving?" plus a lesson). `core/.../market/Edgar.kt` reads SEC filings (User-Agent names the repo, not an email).
+- `core/.../engine/Alerts.kt`: `AlertEngine` (plain-code rules, pure), `AlertSchedule` (9:31 ET, every 15/30 min, close minus 30, trading days only), `OpenBriefer` (the one Claude call at the open) and `MoveExplainer` ("why is it moving?" plus a lesson). `core/.../market/Edgar.kt` reads SEC filings (User-Agent is "ColvinTrades" plus the SimpleLogin alias Jake gave for the SEC; the SEC 403s without a contact email).
 - App: `alerts/` holds the exact alarm (`AlertScheduler`, one alarm at a time, rescheduled after each run, boot and update), `AlertReceiver`, and `AlertService` (a short dataSync foreground service). Inbox, notebook and status are JSON files via `data/AlertStore.kt`, not Room. Alert settings persist with an `al_` prefix and are in the backup.
 - Quiet mode and levels: only `AlertLevel.CRITICAL` (money at risk) buzzes in quiet mode. Alert keys dedupe (ticker + day, and threshold step for moves).

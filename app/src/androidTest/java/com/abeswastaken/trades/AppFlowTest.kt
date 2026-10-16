@@ -44,6 +44,13 @@ class AppFlowTest {
     /** Clicks through the semantics action, so a layout shift mid-tap (quotes, a lookup landing) can't swallow it. */
     private fun SemanticsNodeInteraction.tap() = performSemanticsAction(SemanticsActions.OnClick)
 
+    /** Home is a lazy list, so scroll to the section rather than assume it's composed on a small screen. */
+    private fun homeShowsNeedsYou() {
+        waitFor("the Home list") { hasTag("home_list") }
+        rule.onNodeWithTag("home_list").performScrollToNode(hasText("Needs you"))
+        waitForText("Needs you")
+    }
+
     @Test fun everyTabOpens() {
         rule.onNodeWithText("Colvin Trades").assertExists()
         rule.onNodeWithTag("market_clock").assertExists()
@@ -62,7 +69,7 @@ class AppFlowTest {
         rule.onNodeWithTag("news_REDDIT").assertExists()
         rule.onNodeWithTag("risk_HIGH").assertExists()
         rule.onNodeWithTag("margin_switch").performScrollTo().assertExists()
-        rule.onNodeWithTag("tab_home").performClick(); waitForText("Needs you")
+        rule.onNodeWithTag("tab_home").performClick(); homeShowsNeedsYou()
         rule.onNodeWithTag("home_alerts").assertExists()
     }
 
@@ -72,7 +79,8 @@ class AppFlowTest {
         rule.onNodeWithTag("alerts_quiet").performScrollTo().assertExists()
         rule.onNodeWithTag("alerts_insider").performScrollTo().assertExists()
         rule.onNodeWithTag("alert_test").performScrollTo().tap()
-        rule.onNodeWithTag("tab_home").performClick(); waitForText("Needs you")
+        rule.onNodeWithTag("tab_home").performClick(); homeShowsNeedsYou()
+        rule.onNodeWithTag("home_list").performScrollToNode(androidx.compose.ui.test.hasTestTag("inbox_button"))
         rule.onNodeWithTag("inbox_button").tap()
         waitForText("Notifications work")
         rule.onNodeWithTag("open_notebook").tap()
