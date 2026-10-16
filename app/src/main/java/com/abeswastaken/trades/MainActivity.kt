@@ -20,12 +20,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { TradesTheme { TradesApp(vm) } }
-        if (savedInstanceState == null) handleShare(intent)
+        if (savedInstanceState == null) { handleShare(intent); handleOpen(intent) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
+        handleOpen(intent)
+    }
+
+    /** A tapped alert opens the inbox. */
+    private fun handleOpen(intent: Intent?) {
+        intent?.getStringExtra(com.abeswastaken.trades.alerts.Notifier.EXTRA_OPEN)?.let { vm.openTab.value = it }
     }
 
     /** A Schwab CSV shared or opened from another app goes straight to the import preview on the Ledger tab. */

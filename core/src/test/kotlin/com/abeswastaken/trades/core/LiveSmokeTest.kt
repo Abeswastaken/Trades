@@ -77,6 +77,13 @@ class LiveSmokeTest {
                 com.abeswastaken.trades.core.market.RedditNews(http, listOf(b)).market(3).joinToString(" | ") { "${it.title.take(60)} [${it.source}]" }
             }
         }
+        report("yahoo dividend KO") { yahoo.dividend("KO").toString() }
+        report("yahoo quote extras F") { yahoo.quotes(listOf("F"))["F"]!!.let { "prev ${it.previousClose} open ${it.open} 52w ${it.low52}-${it.high52}" } }
+        val edgar = com.abeswastaken.trades.core.market.Edgar(http)
+        report("edgar cik AAPL") { edgar.cik("AAPL").toString() }
+        report("edgar summary SOFI") {
+            edgar.summary("SOFI", today, days = 60)?.let { s -> "filings=${s.filings.take(5).map { it.form }} insiders=${s.insiders.size} lines=${s.lines()}" } ?: "no CIK"
+        }
         report("market clock") { com.abeswastaken.trades.core.market.MarketClock.session(java.time.ZonedDateTime.now()).toString() }
         report("news Alpha Vantage demo") { AlphaVantageNews(http, "demo").ticker("AAPL", 3).joinToString(" | ") { "${it.title} ${it.sentiment}" } }
     }

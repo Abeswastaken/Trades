@@ -33,4 +33,9 @@ Terse and direct. Has accepted that LLM picks are "educated friend", not edge; d
 - Yahoo endpoints are unofficial (quote, options, screener, saved lists, trending); Finnhub only backs up quotes, not chains. CI's "Live check" step prints what every real feed returns, without failing the build.
 - Room is still at version 1. Before any entity change, commit `app/schemas/` (CI prints it in the "Print the Room schema" step) and add a Migration with a test.
 - Dividends and transfers aren't in the ledger's cash.
-- Parked: push alerts, "Brief me on X", widget.
+- Parked: "Brief me on X", widget.
+
+## Alerts
+- `core/.../engine/Alerts.kt`: `AlertEngine` (plain-code rules, pure), `AlertSchedule` (9:31 ET, every 15/30 min, close minus 30, trading days only), `OpenBriefer` (the one Claude call at the open) and `MoveExplainer` ("why is it moving?" plus a lesson). `core/.../market/Edgar.kt` reads SEC filings (User-Agent names the repo, not an email).
+- App: `alerts/` holds the exact alarm (`AlertScheduler`, one alarm at a time, rescheduled after each run, boot and update), `AlertReceiver`, and `AlertService` (a short dataSync foreground service). Inbox, notebook and status are JSON files via `data/AlertStore.kt`, not Room. Alert settings persist with an `al_` prefix and are in the backup.
+- Quiet mode and levels: only `AlertLevel.CRITICAL` (money at risk) buzzes in quiet mode. Alert keys dedupe (ticker + day, and threshold step for moves).

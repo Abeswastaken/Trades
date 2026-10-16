@@ -66,6 +66,19 @@ class AppFlowTest {
         rule.onNodeWithTag("home_alerts").assertExists()
     }
 
+    @Test fun alertSettingsAndTestAlertReachTheInbox() {
+        rule.onNodeWithTag("tab_settings").performClick(); waitForText("Anthropic Console")
+        rule.onNodeWithTag("alerts_switch").performScrollTo().assertExists()
+        rule.onNodeWithTag("alerts_quiet").performScrollTo().assertExists()
+        rule.onNodeWithTag("alerts_insider").performScrollTo().assertExists()
+        rule.onNodeWithTag("alert_test").performScrollTo().tap()
+        rule.onNodeWithTag("tab_home").performClick(); waitForText("Needs you")
+        rule.onNodeWithTag("inbox_button").tap()
+        waitForText("Notifications work")
+        rule.onNodeWithTag("open_notebook").tap()
+        waitForText("Every \"why is it moving?\" answer")
+    }
+
     @Test fun logAFillAndSeeItEverywhere() {
         rule.onNodeWithTag("tab_ledger").performClick()
         rule.onNodeWithTag("log_fill_fab").performClick()

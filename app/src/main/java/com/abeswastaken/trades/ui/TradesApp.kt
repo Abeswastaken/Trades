@@ -107,12 +107,17 @@ fun TradesApp(vm: AppViewModel) {
                     vm, openRec = { nav.navigate("rec/$it") },
                     openPositions = { go("positions") },
                     openWatch = { tab -> vm.watchTab.value = tab; go("watch") },
+                    openInbox = { nav.navigate("inbox") { launchSingleTop = true } },
                 )
             }
-            composable("positions") { PositionsScreen(vm, openLog = { nav.navigate("log") }) }
+            composable("positions") { PositionsScreen(vm, openLog = { nav.navigate("log") }, openNotebook = { nav.navigate("lessons") }) }
             composable("ledger") { LedgerScreen(vm, openLog = { nav.navigate("log") }) }
             composable("watch") { WatchlistScreen(vm, openRec = { nav.navigate("rec/$it") }) }
-            composable("settings") { SettingsScreen(vm) }
+            composable("settings") { SettingsScreen(vm, openInbox = { nav.navigate("inbox") { launchSingleTop = true } }) }
+            composable("inbox") {
+                com.abeswastaken.trades.ui.screens.InboxScreen(vm, back = { if (!nav.popBackStack()) nav.navigate("home") }, openNotebook = { nav.navigate("lessons") })
+            }
+            composable("lessons") { com.abeswastaken.trades.ui.screens.NotebookScreen(vm, back = { nav.popBackStack() }) }
             composable("rec/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { e ->
                 RecommendationScreen(
                     vm, e.arguments?.getLong("id") ?: 0L,

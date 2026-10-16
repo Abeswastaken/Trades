@@ -28,6 +28,8 @@ data class BuzzCheck(
     /** A WSB-style lottery ticket: crowd pile-in on a big move or huge volume. */
     val longShot: Boolean,
     val longShotWhy: String?,
+    /** What the SEC record shows (insider buys, offerings), for the hype check. */
+    val filings: List<String> = emptyList(),
 ) {
     val ticker get() = item.ticker
 
@@ -43,7 +45,15 @@ data class BuzzCheck(
         append(". Check: ${verdict.label}")
         if (longShot) append(". LONG SHOT")
         news.firstOrNull()?.let { append(". News: ${it.title}") }
+        if (filings.isNotEmpty()) append(". SEC: ${filings.joinToString("; ")}")
     }
+
+    /** Adds the SEC lines (insider buys, offerings) to the cross-check. */
+    fun withFilings(lines: List<String>): BuzzCheck = if (lines.isEmpty()) this else copy(
+        filings = lines,
+        standouts = standouts + lines.map { "SEC: $it" },
+        longShotWhy = longShotWhy?.let { w -> if (lines.any { it.startsWith("Offering") }) "$w Offering on file: dilution risk." else w },
+    )
 }
 
 /** The cheapest sensible way to take a long-shot swing: one near out-of-the-money call. */
@@ -174,7 +184,8 @@ class BuzzVerifier(private val llm: LlmClient) {
             - checksOut names the concrete evidence (the price move, the volume, the headline). If nothing
               backs it, say so.
             - redFlags: missing news, a move already done, dilution or offering talk, tiny float pumps,
-              claims the headlines contradict.
+              claims the headlines contradict. SEC lines are facts from EDGAR: an offering filed while the
+              crowd is pumping is a red flag; insiders buying with their own money supports the claim.
             - longShot = true only for lottery-ticket setups (crowd piling in on a stock already making a
               huge move). Say plainly in redFlags what makes it a gamble.
             - summary: two or three sentences on what Reddit is excited about today and how much of it is real.

@@ -439,4 +439,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finnhubTest.value = "Testing…"
         viewModelScope.launch { finnhubTest.value = repo.testFinnhubKey(key) }
     }
+
+    // ---- Alerts --------------------------------------------------------------------------------
+
+    val inbox = repo.alertStore.inbox
+    val lessons = repo.alertStore.lessons
+    val alertStatus = repo.alertStore.status
+    val unread: StateFlow<Int> = inbox.map { l -> l.count { !it.read } }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** Changes Settings → Alerts and resets the alarm to match. */
+    fun updateAlerts(block: com.abeswastaken.trades.core.engine.AlertRules.() -> com.abeswastaken.trades.core.engine.AlertRules) {
+        repo.settings.update { copy(alerts = alerts.block()) }
+        runCatching { com.abeswastaken.trades.alerts.AlertScheduler.schedule(getApplication<Application>()) }
+            .onFailure { AppLog.e("Scheduling alerts failed", it) }
+    }
+
+    fun sendTestAlert() {
+        val item = repo.testAlert()
+        com.abeswastaken.trades.alerts.Notifier.post(getApplication<Application>(), item)
+        toast.value = if (com.abeswastaken.trades.alerts.Notifier.enabled(getApplication<Application>())) "Test alert sent" else "Saved to the inbox, but notifications are off for this app"
+    }
+
+    val checking = MutableStateFlow(false)
+
+    /** Runs a full check now (open brief excluded), whatever the time. */
+    fun checkNow() {
+        if (checking.value) return
+        checking.value = true
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val before = inbox.value.size
+                com.abeswastaken.trades.alerts.AlertRunner.run(getApplication<Application>(), com.abeswastaken.trades.core.engine.CheckKind.MANUAL)
+                val n = inbox.value.size - before
+                toast.value = if (n > 0) "$n new alert${if (n > 1) "s" else ""}" else "Nothing new"
+            } catch (e: Exception) {
+                AppLog.e("Check now failed", e)
+                toast.value = "Check failed: ${e.message}"
+            } finally {
+                checking.value = false
+            }
+        }
+    }
+
+    fun markInboxRead() = repo.alertStore.markAllRead()
+
+    fun clearInbox() = repo.alertStore.clear()
+
+    val explanations = MutableStateFlow<Map<String, Work<com.abeswastaken.trades.data.LessonEntry>>>(emptyMap())
+
+    /** "Why is it moving?": Claude explains and saves a lesson to the notebook. */
+    fun explain(ticker: String) {
+        val t = ticker.uppercase()
+        if (explanations.value[t] is Work.Running) return
+        explanations.value = explanations.value + (t to Work.Running("Reading the news and filings on $t"))
+        viewModelScope.launch {
+            val w = try { Work.Done(repo.explainMove(t)) } catch (e: Exception) {
+                AppLog.e("Why $t failed", e); Work.Failed(e.message ?: e.javaClass.simpleName)
+            }
+            explanations.value = explanations.value + (t to w)
+        }
+    }
 }

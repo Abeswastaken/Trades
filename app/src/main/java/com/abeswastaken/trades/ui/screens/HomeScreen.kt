@@ -69,7 +69,7 @@ private val clockDay = DateTimeFormatter.ofPattern("EEE h:mm a")
 private data class Alert(val text: String, val urgent: Boolean, val instrument: Instrument? = null)
 
 @Composable
-fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> Unit, openWatch: (Int) -> Unit) {
+fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> Unit, openWatch: (Int) -> Unit, openInbox: () -> Unit = {}) {
     val ledger by vm.ledger.collectAsState()
     val settings by vm.settings.collectAsState()
     val quotes by vm.quotes.collectAsState()
@@ -95,6 +95,8 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
     }
 
     var model by remember(settings.defaultModel) { mutableStateOf(settings.defaultModel) }
+    var why by remember { mutableStateOf<String?>(null) }
+    why?.let { WhyDialog(vm, it) { why = null } }
     var focus by rememberSaveable { mutableStateOf("") }
 
     // Stock at last quote; options at the current mid when known, otherwise at their open price.
@@ -115,6 +117,7 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp, bottom = 12.dp)) {
                 Text("Colvin Trades", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                InboxBell(vm, openInbox)
                 MarketClockPill()
             }
             InfoCard {
@@ -166,6 +169,10 @@ fun HomeScreen(vm: AppViewModel, openRec: (Long) -> Unit, openPositions: () -> U
                             Text("${qty(p.quantity)} @ ${q?.let { px(it.price) } ?: "?"}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))
                             q?.changePercent?.let { Text(pct(it), color = pnlColor(it), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp)) }
                             q?.let { val u = (it.price - p.avgCost) * p.quantity; Text(signedMoney(u), color = pnlColor(u), style = MaterialTheme.typography.bodySmall) }
+                            Text(
+                                "Why?", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.clickable { why = inst.ticker }.padding(start = 10.dp, top = 4.dp, bottom = 4.dp),
+                            )
                         } else {
                             val dte = inst.expiry?.let { ChronoUnit.DAYS.between(now, it) }
                             Text("${if (p.quantity < 0) "short" else "long"} ${qty(abs(p.quantity))} · ${dte ?: "?"}d", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 8.dp))

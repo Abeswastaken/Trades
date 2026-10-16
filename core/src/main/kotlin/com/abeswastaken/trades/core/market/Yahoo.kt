@@ -153,6 +153,10 @@ class YahooMarketData(
         return ChainSnapshot(dates, calls)
     }
 
+    /** Next ex-dividend date and amount from quoteSummary; null fields when the stock pays none. */
+    suspend fun dividend(symbol: String): Dividend =
+        parseDividend(symbol, getJson("/v10/finance/quoteSummary/$symbol", mapOf("modules" to "summaryDetail,calendarEvents")))
+
     override suspend fun news(symbol: String, limit: Int): List<Headline> {
         val url = "$rssBase/rss/2.0/headline".toHttpUrl().newBuilder()
             .addQueryParameter("s", symbol).addQueryParameter("region", "US").addQueryParameter("lang", "en-US").build()
@@ -201,7 +205,20 @@ class YahooMarketData(
                 nextEarnings = earnings,
                 source = "Yahoo",
                 volume = o.long("regularMarketVolume"),
+                previousClose = o.num("regularMarketPreviousClose"),
+                open = o.num("regularMarketOpen"),
+                high52 = o.num("fiftyTwoWeekHigh"),
+                low52 = o.num("fiftyTwoWeekLow"),
             )
+        }
+
+        internal fun parseDividend(symbol: String, root: JsonObject): Dividend {
+            val r = root.obj("quoteSummary")?.arr("result")?.firstOrNull()?.jsonObject ?: return Dividend(symbol, null, null)
+            val detail = r.obj("summaryDetail")
+            val cal = r.obj("calendarEvents")
+            val ex = (cal?.long("exDividendDate") ?: detail?.long("exDividendDate"))?.let(::epochToDate)
+            val rate = detail?.num("dividendRate") ?: detail?.num("trailingAnnualDividendRate")
+            return Dividend(symbol, ex, rate?.takeIf { it > 0 }?.let { it / 4 })
         }
 
         internal fun parseCalls(symbol: String, root: JsonObject): List<OptionQuote> {

@@ -52,7 +52,7 @@ import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(vm: AppViewModel) {
+fun SettingsScreen(vm: AppViewModel, openInbox: () -> Unit = {}) {
     val s by vm.settings.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -162,6 +162,9 @@ fun SettingsScreen(vm: AppViewModel) {
                     modifier = Modifier.padding(top = 8.dp),
                 ) { Text("Save") }
             }
+
+            SectionTitle("Alerts")
+            AlertsSettings(vm, openInbox)
 
             SectionTitle("Market data")
             InfoCard {

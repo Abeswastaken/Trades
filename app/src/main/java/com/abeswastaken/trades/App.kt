@@ -19,6 +19,8 @@ class App : Application() {
             previous?.uncaughtException(t, e)
         }
         repo = Repository(TradesDb.create(this), SettingsStore(this), filesDir)
+        com.abeswastaken.trades.alerts.Notifier.channels(this)
+        runCatching { com.abeswastaken.trades.alerts.AlertScheduler.schedule(this) }.onFailure { AppLog.e("Scheduling alerts failed", it) }
         AppLog.i("App started, version ${packageManager.getPackageInfo(packageName, 0).versionName}")
     }
 }
